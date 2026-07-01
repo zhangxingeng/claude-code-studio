@@ -11,7 +11,7 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 const root = join(__dir, '..');
 
 // Use tsx to import TS modules
-const { parseJsonl, extractMeta, decodeProject } = await import(join(root, 'src/lib/parser.ts'));
+const { parseJsonl, extractMeta, decodeProject, cleanTitle } = await import(join(root, 'src/lib/parser.ts'));
 const { buildSession, linkSubagents } = await import(join(root, 'src/lib/builder.ts'));
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -111,6 +111,17 @@ console.log('\n[decodeProject]');
 const decoded = decodeProject('-home-user-myproject');
 assert(decoded.length > 0, `decodeProject: "${decoded}"`);
 assert(!decoded.startsWith('-'), 'no leading dash');
+
+// ── Test cleanTitle ───────────────────────────────────────────────────────────
+console.log('\n[cleanTitle]');
+assert(
+  cleanTitle('# My Session Title') === 'My Session Title',
+  'cleanTitle: strips leading "# "'
+);
+assert(
+  cleanTitle('Hello\n\nWorld') === 'Hello World',
+  'cleanTitle: collapses newlines to single space'
+);
 
 // ── Test linkSubagents ────────────────────────────────────────────────────────
 console.log('\n[linkSubagents]');

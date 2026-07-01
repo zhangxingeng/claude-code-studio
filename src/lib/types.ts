@@ -65,6 +65,14 @@ export interface SessionMeta {
   mtime: number;
   size: number;
   preview: string[];  // first ~50 raw JSONL lines
+  // Cheap stats computed server-side in one pass over the file
+  line_count: number;       // non-empty lines
+  user_count: number;       // lines whose type == "user"
+  assistant_count: number;  // lines whose type == "assistant"
+  subagent_count: number;   // count of subagents/agent-*.jsonl next to the session file
+  models: string[];         // distinct message.model values, first-seen order
+  first_ts: string;         // first timestamp value seen ("" if none)
+  last_ts: string;          // last timestamp value seen ("" if none)
 }
 
 /** Returned by Rust read_subagents. */

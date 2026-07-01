@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Claude Code Visualizer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.zhangxingeng.ccviz",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,7 +14,9 @@
       {
         "title": "Claude Code Visualizer",
         "width": 1100,
-        "height": 800
+        "height": 800,
+        "minWidth": 640,
+        "minHeight": 480
       }
     ],
     "security": {
@@ -24,6 +26,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Utility",
+    "shortDescription": "Browse and edit your Claude Code chat history, offline.",
+    "longDescription": "An offline desktop app that auto-discovers your Claude Code sessions and renders them as clean, readable conversations — including thinking, tool calls, results, and subagents. Edit, prune, back up, and export history. Your data never leaves your machine.",
+    "publisher": "zhangxingeng",
+    "copyright": "Copyright (c) 2026 zhangxingeng. MIT licensed.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

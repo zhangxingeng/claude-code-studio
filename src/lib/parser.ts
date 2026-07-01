@@ -133,6 +133,29 @@ function extractContentBlocks(rawBlocks: RawBlock[]): ContentBlock[] {
 }
 
 // ---------------------------------------------------------------------------
+// Title cleanup
+// ---------------------------------------------------------------------------
+
+/**
+ * Clean a raw session title for display:
+ * 1. Collapse all whitespace runs (incl. newlines/tabs) to a single space.
+ * 2. Remove remaining non-whitespace control characters (U+0000–U+001F, U+007F).
+ * 3. Strip leading markdown/quoting noise: #, >, *, -, backticks, surrounding quotes.
+ * 4. Trim. Returns '' for blank input (caller falls back to 'Untitled').
+ */
+export function cleanTitle(s: string): string {
+  // Collapse all whitespace (newlines, tabs, etc.) to a single space
+  let t = s.replace(/\s+/g, ' ');
+  // Remove any remaining non-whitespace control characters
+  t = t.replace(/[\x00-\x1F\x7F]/g, '');
+  // Strip leading markdown/quoting noise: #, >, *, -, backticks, straight/smart quotes
+  t = t.replace(/^[\s#>*\-`'"'"‘’“”]+/, '');
+  // Strip trailing straight/smart quotes
+  t = t.replace(/['"'"‘’“”]+$/, '');
+  return t.trim();
+}
+
+// ---------------------------------------------------------------------------
 // Primary export: parseJsonl
 // ---------------------------------------------------------------------------
 
@@ -288,6 +311,9 @@ export function extractMeta(
       if (title && date && model) break;
     }
   }
+
+  // Clean title before truncation
+  if (title) title = cleanTitle(title);
 
   // Truncate long titles
   if (title.length > 80) title = title.slice(0, 80) + '…';

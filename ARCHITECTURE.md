@@ -28,12 +28,20 @@ list_sessions() -> SessionMeta[]
     // Skip dirs named "subagents", "tool-results". For every *.jsonl that is
     // NOT named "agent-*.jsonl", return one SessionMeta.
     SessionMeta {
-      id: string,          // stable id = relative path from projects dir
-      path: string,        // absolute path to the .jsonl
-      project_raw: string, // the encoded project dir name
-      mtime: number,       // unix seconds (file modified time)
-      size: number,        // bytes
-      preview: string[],   // first up to 50 lines of the file (for JS metadata extraction)
+      id: string,              // stable id = relative path from projects dir
+      path: string,            // absolute path to the .jsonl
+      project_raw: string,     // the encoded project dir name
+      mtime: number,           // unix seconds (file modified time)
+      size: number,            // bytes
+      preview: string[],       // first up to 50 lines of the file (for JS metadata extraction)
+      // Cheap stats — computed in one pass over the full file content:
+      line_count: number,      // non-empty lines in the file
+      user_count: number,      // lines whose "type" == "user"
+      assistant_count: number, // lines whose "type" == "assistant"
+      subagent_count: number,  // count of subagents/agent-*.jsonl next to the session file
+      models: string[],        // distinct message.model values, first-seen order
+      first_ts: string,        // first "timestamp" value seen ("" if none)
+      last_ts: string,         // last "timestamp" value seen ("" if none)
     }
 
 read_session(path) -> string
@@ -59,6 +67,18 @@ list_backups(session_path) -> BackupVersion[]
 restore_backup(backup_path) -> string
     // Return the raw contents of a backup version (frontend decides what to do:
     // it will snapshot current state, then write this content back).
+
+read_edit_draft(session_path) -> string | null
+    // Return the raw JSON of a saved edit draft for this session, or null if
+    // no draft file exists. Draft store: ~/.claude/.ccviz-edits/<sanitized_id>.json
+    // where sanitized_id = sanitize_id(relative path from projects dir).
+
+write_edit_draft(session_path, content) -> null
+    // Persist an edit draft (creates ~/.claude/.ccviz-edits/ if needed).
+    // content is the JSON.stringify of the Draft object (see editDraft.ts).
+
+delete_edit_draft(session_path) -> null
+    // Delete the edit draft for this session. No-op if already absent.
 ```
 
 Rust crates to add: `dirs` (home dir), `serde`/`serde_json` (already present),

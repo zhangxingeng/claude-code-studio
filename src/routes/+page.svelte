@@ -5,6 +5,7 @@
    * States: browse | viewer
    * Orchestrates: session loading, subagent linking, HTML export, theme toggle.
    */
+  import { tick } from 'svelte';
   import type { Session, SessionMeta } from '$lib/types';
   import { readSession, readSubagents } from '$lib/api';
   import { parseJsonl, decodeProject } from '$lib/parser';
@@ -13,7 +14,7 @@
   import { cleanFilename } from '$lib/markdown';
   import BrowseView from '$lib/components/BrowseView.svelte';
   import SessionView from '$lib/components/SessionView.svelte';
-  import EditView from '$lib/components/EditView.svelte';
+  import SessionEditor from '$lib/components/SessionEditor.svelte';
 
   // Inline app.css for the standalone HTML export.
   import appCss from '../app.css?inline';
@@ -25,11 +26,15 @@
   let loadError = $state<string | null>(null);
   let theme = $state(getTheme());
 
-  // DOM ref for the rendered session — used by exportHtml().
-  let viewerEl: HTMLDivElement | undefined = $state(undefined);
+  // DOM ref for the read-only export render — used by exportHtml().
+  let exportEl: HTMLDivElement | undefined = $state(undefined);
+  // Lazily mount the read-only SessionView (only while exporting) so we never
+  // pay to render the whole conversation twice during normal editing.
+  let exporting = $state(false);
 
-  // Edit mode — when true, show EditView instead of the read-only SessionView.
-  let editMode = $state(false);
+  // Exit guard installed by SessionEditor — the header ← Back calls this so the
+  // editor can prompt about unsaved edits before we navigate away.
+  let requestEditorExit = $state<(() => void) | undefined>(undefined);
 
   // ── session opening ───────────────────────────────────────────────────────
   async function openSession(meta: SessionMeta): Promise<void> {
@@ -57,7 +62,13 @@
     view = 'browse';
     current = null;
     loadError = null;
-    editMode = false;
+    requestEditorExit = undefined;
+  }
+
+  // Header ← Back: let the editor handle unsaved-edit prompting first.
+  function handleBack(): void {
+    if (requestEditorExit) requestEditorExit();
+    else backToBrowse();
   }
 
   // ── theme ─────────────────────────────────────────────────────────────────
@@ -66,13 +77,19 @@
   }
 
   // ── HTML export ───────────────────────────────────────────────────────────
-  function exportHtml(): void {
-    if (!current || !viewerEl) return;
+  // Renders the read-only SessionView into a hidden node, captures its markup,
+  // then unmounts it — the editor chrome never leaks into the exported file.
+  async function exportHtml(): Promise<void> {
+    if (!current) return;
+    exporting = true;
+    await tick();
+    if (!exportEl) { exporting = false; return; }
 
     const title = current.meta.title;
     const project = current.meta.project;
     const dataTheme = document.documentElement.getAttribute('data-theme') ?? 'light';
-    const contentHtml = viewerEl.innerHTML;
+    const contentHtml = exportEl.innerHTML;
+    exporting = false;
 
     const htmlDoc = `<!DOCTYPE html>
 <html lang="en" data-theme="${dataTheme}">
@@ -117,17 +134,12 @@ ${contentHtml}
 
   <div class="app-header__actions">
     {#if view === 'viewer'}
-      <button class="back-link" onclick={backToBrowse} type="button">
-        Back
+      <button class="btn btn--ghost btn--sm" onclick={handleBack} type="button">
+        ← Back
       </button>
-      {#if !editMode}
-        <button class="btn btn--sm" onclick={exportHtml} type="button">
-          Export HTML
-        </button>
-        <button class="btn btn--sm" onclick={() => (editMode = true)} type="button">
-          Edit
-        </button>
-      {/if}
+      <button class="btn btn--sm" onclick={exportHtml} type="button">
+        Export HTML
+      </button>
     {/if}
     <button class="btn btn--ghost btn--sm" onclick={handleToggleTheme} type="button">
       {theme === 'dark' ? 'Dark' : 'Light'}
@@ -144,10 +156,14 @@ ${contentHtml}
   {:else if view === 'browse'}
     <BrowseView onOpen={openSession} />
   {:else if view === 'viewer' && current}
-    {#if editMode}
-      <EditView path={current.meta.sourcePath} onDone={() => (editMode = false)} />
-    {:else}
-      <div bind:this={viewerEl}>
+    <SessionEditor
+      path={current.meta.sourcePath}
+      onExit={backToBrowse}
+      bind:requestExit={requestEditorExit}
+    />
+    {#if exporting}
+      <!-- Hidden read-only render captured by exportHtml(), then unmounted -->
+      <div bind:this={exportEl} style="display:none;" aria-hidden="true">
         <SessionView session={current} />
       </div>
     {/if}
