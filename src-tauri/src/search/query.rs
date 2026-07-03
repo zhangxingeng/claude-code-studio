@@ -48,7 +48,7 @@ pub struct SearchFilters {
     pub projects: Vec<String>,
 }
 
-/// Returned when a search finishes (or is cancelled).
+/// Returned when a search finishes (or is cancelled / truncated by limit).
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchSummary {
@@ -58,6 +58,8 @@ pub struct SearchSummary {
     pub scanned: usize,
     /// True if a newer search superseded this one before it finished.
     pub cancelled: bool,
+    /// True if the scan stopped early because it hit the optional `limit`.
+    pub truncated: bool,
 }
 
 /// One search result: a matched block plus a windowed snippet and the match
@@ -219,17 +221,24 @@ fn passes_source_and_date(source: &str, ts: Option<i64>, filters: &SearchFilters
 }
 
 /// Cold-path scan: apply the same filters + regex to freshly-extracted blocks
-/// from a session not yet in the cache. Emits a hit per match. Returns the count.
+/// from a session not yet in the cache. Emits a hit per match. `remaining` is an
+/// optional upper bound on how many hits to emit (from the overall search limit,
+/// taking already-emitted warm hits into account). Returns the count actually
+/// emitted.
 pub fn scan_blocks<E: FnMut(SearchHit)>(
     session_path: &str,
     project: &str,
     blocks: &[super::extract::ExtractedBlock],
     re: &Regex,
     filters: &SearchFilters,
+    remaining: Option<usize>,
     emit: &mut E,
 ) -> usize {
     let mut n = 0;
     for b in blocks {
+        if let Some(max) = remaining {
+            if n >= max { break; }
+        }
         if !passes_source_and_date(&b.source, b.ts, filters) {
             continue;
         }
@@ -254,11 +263,13 @@ pub fn scan_blocks<E: FnMut(SearchHit)>(
 /// Warm-path streaming search. SQL-prefilters candidate blocks, scans each with
 /// the (prebuilt) regex, and calls `emit` for every hit as it's found.
 /// `cancelled` is polled periodically; when it returns true the scan stops
-/// promptly (a newer search has superseded this one).
+/// promptly (a newer search has superseded this one). When `limit` is `Some(n)`,
+/// the scan stops after `n` hits and sets `summary.truncated = true`.
 pub fn search_streaming<E, C>(
     conn: &Connection,
     re: &Regex,
     filters: &SearchFilters,
+    limit: Option<usize>,
     mut emit: E,
     cancelled: C,
 ) -> Result<SearchSummary, String>
@@ -297,6 +308,12 @@ where
             match_ranges,
         });
         summary.hits += 1;
+        if let Some(max) = limit {
+            if summary.hits >= max {
+                summary.truncated = true;
+                break;
+            }
+        }
     }
 
     Ok(summary)
@@ -316,7 +333,7 @@ pub fn search(
     }
     let re = build_regex(query, opts)?;
     let mut hits = Vec::new();
-    search_streaming(conn, &re, filters, |h| hits.push(h), || false)?;
+    search_streaming(conn, &re, filters, None, |h| hits.push(h), || false)?;
     Ok(hits)
 }
 

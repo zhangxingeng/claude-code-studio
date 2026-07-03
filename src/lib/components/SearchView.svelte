@@ -17,6 +17,7 @@
     clearProjects,
     setDateRange,
     scheduleSearch,
+    loadMore,
     initSearch,
     disposeSearch,
   } from '$lib/search.svelte';
@@ -245,6 +246,12 @@
       </div>
     {/each}
 
+    {#if search.moreAvailable && !search.running}
+      <button class="load-more" onclick={loadMore} type="button">
+        Load more results…
+      </button>
+    {/if}
+
     {#if search.query && !search.running && search.hits.length === 0 && !search.error}
       <div class="empty-state">No matches.</div>
     {/if}
@@ -347,4 +354,11 @@
     white-space: pre-wrap; word-break: break-word;
   }
   .hit-snippet mark { background: color-mix(in srgb, var(--accent-user) 40%, transparent); color: var(--text); border-radius: 0.15rem; padding: 0 0.05rem; }
+
+  .load-more {
+    width: 100%; padding: 0.55rem; font-size: 0.82rem; margin-top: 0.25rem;
+    background: var(--bg-subtle); color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 0.4rem; cursor: pointer;
+  }
+  .load-more:hover { color: var(--text); border-color: var(--border-strong); }
 </style>

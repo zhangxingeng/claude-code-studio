@@ -181,9 +181,10 @@ export async function searchSessions(
   opts: SearchOpts,
   filters: SearchFilters,
   searchId: number,
+  limit: number,
   onHit: (hit: SearchHit) => void
 ): Promise<SearchSummary> {
-  if (!isTauri()) return devSearch(query, opts, filters, onHit);
+  if (!isTauri()) return devSearch(query, opts, filters, limit, onHit);
 
   const { invoke, Channel } = await import('@tauri-apps/api/core');
   const channel = new Channel<SearchHit>();
@@ -193,6 +194,7 @@ export async function searchSessions(
     opts,
     filters,
     searchId,
+    limit,
     onHit: channel,
   });
 }
@@ -225,9 +227,10 @@ async function devSearch(
   query: string,
   opts: SearchOpts,
   filters: SearchFilters,
+  limit: number,
   onHit: (hit: SearchHit) => void
 ): Promise<SearchSummary> {
-  const summary: SearchSummary = { hits: 0, scanned: 0, cancelled: false };
+  const summary: SearchSummary = { hits: 0, scanned: 0, cancelled: false, truncated: false };
   if (!query) return summary;
   const re = buildDevRegex(query, opts);
   if (!re) return summary;
@@ -237,13 +240,13 @@ async function devSearch(
   const project = '~/dev/demo-project';
   if (filters.projects.length && !filters.projects.includes(project)) return summary;
 
-  entries.forEach((entry, lineNo) => {
-    entry.blocks.forEach((b, blockNo) => {
+  DEV: for (const [lineNo, entry] of entries.entries()) {
+    for (const [blockNo, b] of entry.blocks.entries()) {
       const source =
         b.blockType === 'text' ? entry.type
         : b.blockType === 'thinking' ? 'thinking'
         : b.blockType; // tool_use | tool_result
-      if (filters.sources.length && !filters.sources.includes(source)) return;
+      if (filters.sources.length && !filters.sources.includes(source)) continue;
       const text = b.text ?? b.thinking ?? b.toolOutput ?? b.toolName ?? '';
       re.lastIndex = 0;
       summary.scanned++;
@@ -253,7 +256,7 @@ async function devSearch(
         ranges.push([m.index, m.index + m[0].length]);
         if (m[0].length === 0) re.lastIndex++;
       }
-      if (!ranges.length) return;
+      if (!ranges.length) continue;
       onHit({
         sessionPath: '/dev/mock/session.jsonl',
         project,
@@ -266,7 +269,11 @@ async function devSearch(
         matchRanges: ranges.filter(([s]) => s < 240) as [number, number][],
       });
       summary.hits++;
-    });
-  });
+      if (summary.hits >= limit) {
+        summary.truncated = true;
+        break DEV;
+      }
+    }
+  }
   return summary;
 }

@@ -186,6 +186,7 @@ pub async fn search(
     opts: SearchOpts,
     filters: SearchFilters,
     search_id: u64,
+    limit: Option<usize>,
     on_hit: Channel<SearchHit>,
 ) -> Result<SearchSummary, String> {
     // Register this as the current search before doing any work.
@@ -212,6 +213,7 @@ pub async fn search(
             &conn,
             &re,
             &filters,
+            limit,
             |hit| {
                 let _ = on_hit.send(hit);
             },
@@ -220,7 +222,8 @@ pub async fn search(
         summary.hits += warm.hits;
         summary.scanned += warm.scanned;
         summary.cancelled = warm.cancelled;
-        if summary.cancelled {
+        summary.truncated = warm.truncated;
+        if summary.cancelled || summary.truncated {
             return Ok(summary);
         }
 
@@ -240,6 +243,11 @@ pub async fn search(
                 summary.cancelled = true;
                 break;
             }
+            let remaining = limit.map(|max| max.saturating_sub(summary.hits));
+            if remaining == Some(0) {
+                summary.truncated = true;
+                break;
+            }
             let sp = path.to_string_lossy().to_string();
             if cached.contains(&sp) {
                 continue; // already covered by the warm tier
@@ -250,9 +258,15 @@ pub async fn search(
             if !filters.projects.is_empty() && !filters.projects.iter().any(|p| *p == project) {
                 continue;
             }
-            summary.hits += query::scan_blocks(&sp, &project, &blocks, &re, &filters, &mut |hit| {
+            summary.hits += query::scan_blocks(&sp, &project, &blocks, &re, &filters, remaining, &mut |hit| {
                 let _ = on_hit.send(hit);
             });
+            if let Some(max) = limit {
+                if summary.hits >= max {
+                    summary.truncated = true;
+                    break;
+                }
+            }
         }
 
         Ok(summary)

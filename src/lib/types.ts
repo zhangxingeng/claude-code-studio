@@ -109,11 +109,12 @@ export interface SearchHit {
   matchRanges: [number, number][];
 }
 
-/** Returned when a search finishes (or is superseded). */
+/** Returned when a search finishes (or is superseded / truncated by limit). */
 export interface SearchSummary {
   hits: number;
   scanned: number;
   cancelled: boolean;
+  truncated: boolean;
 }
 
 /** Cheap index status for the "indexing N/M…" indicator. */

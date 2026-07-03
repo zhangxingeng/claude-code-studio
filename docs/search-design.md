@@ -1,9 +1,11 @@
 # Search — Design & Implementation Plan
 
-Status: **BUILT** (all 12 milestones, on `main`, uncommitted/unreleased as of 2026-07-03).
-Backend: `src-tauri/src/search/{db,extract,index,query,state}.rs` — 14 unit/integration tests green,
-release build clean. Frontend: `src/lib/search.svelte.ts` (store), `src/lib/components/SearchView.svelte`,
-wired into `src/routes/+page.svelte` (new **Search** view) with jump-to-hit in `SessionEditor.svelte`.
+Status: **BUILT** (all 12 milestones + Phase 2 collapsible groups & pagination, on `main`,
+committed as of 2026-07-03). Backend: `src-tauri/src/search/{db,extract,index,query,state}.rs`
+— 18 unit/integration tests green (up from 14), release build clean. Frontend:
+`src/lib/search.svelte.ts` (store), `src/lib/components/SearchView.svelte`, wired into
+`src/routes/+page.svelte` (new **Search** view) with jump-to-hit in `SessionEditor.svelte`.
+Phase 2 remaining (see below): keyboard nav, tool-name + current-session filters.
 
 **Deviations from the spec below (intentional):**
 - `blocks` gained a **`uuid`** column — the frontend regroups entries into turns and flattens blocks,
@@ -28,45 +30,32 @@ and richer filtering. Status of each:
    `$state`, reset via `$effect` whenever `search.query` changes (new search = fresh result set).
    Purely a frontend change, no backend/store changes needed.
 
-2. **Real pagination / backend limit — NOT STARTED, highest-value remaining item.** Today
-   `query::search_streaming` (in `search/query.rs`) scans and streams *every* matching block over
-   the `Channel<SearchHit>` on every keystroke; `search.svelte.ts`'s `MAX_DISPLAY_HITS = 1000` only
-   stops the **frontend** from appending more — the Rust scan, snippet-building, and IPC sends for
-   hits past 1000 still happen. For a broad query over a large history this is real wasted work per
-   keystroke, which is the "loading overhead" the user flagged.
-   - Plan: add a `limit: usize` (e.g. matching `MAX_DISPLAY_HITS`, or a smaller page size like 100–200)
-     to the `search` Tauri command / `SearchFilters`-adjacent params. `search_streaming` stops emitting
-     (and the caller stops scanning further candidate blocks) once `summary.hits >= limit`, returning
-     `summary.truncated = true` (rename/reuse the existing frontend `truncated` flag, currently derived
-     client-side).
-   - Frontend: replace the fixed display cap with a "Load more" affordance (button or
-     `IntersectionObserver` at the list bottom) that reruns/continues the search with a larger limit
-     or an offset/cursor. Simplest first cut: re-issue the same search with `limit` bumped by one page
-     (candidate order is already stable/recency-sorted per §10, so this is safe) rather than building
-     real OFFSET-based paging.
-   - Keep this scoped to warm-tier `search_streaming`; the cold-tier fallback loop in `state.rs::search`
-     should also respect the same limit/early-exit.
+2. **Real pagination / backend limit — DONE 2026-07-03.** Added `limit: Option<usize>` to the
+   `search` Tauri command + `search_streaming` + `scan_blocks` (cold path). Both tiers now stop
+   scanning/snippet-building/sending once `summary.hits >= limit` and set `summary.truncated = true`.
+   Frontend: replaced the hard `MAX_DISPLAY_HITS = 1000` client-side cap with a `PAGE_SIZE = 100`
+   server-side limit; `loadMore()` bumps limit and re-runs; "Load more results…" button in
+   `SearchView.svelte` when `moreAvailable`. New queries + filter changes reset `limit` to page 1.
+   All 18 Rust tests green, `pnpm check` + `pnpm build` clean. Files: `query.rs`, `state.rs`,
+   `api.ts`, `search.svelte.ts`, `SearchView.svelte`, `types.ts`.
 
-3. **Keyboard navigation — NOT STARTED.** No ↑/↓ + Enter to move between hits today (mouse-only).
-   Plan: track a "focused hit" index in `search.svelte.ts` or locally in `SearchView.svelte`, wire
-   `keydown` on the results container (↓/↑ move focus across the flattened, collapse-aware hit list;
-   Enter calls `onJump` on the focused hit; skip collapsed groups' hits when navigating).
+3. **Keyboard navigation (↑/↓/Enter across hits) — NOT STARTED.** No ↑/↓ + Enter to move
+   between hits today (mouse-only). Plan: track a focused hit index in `SearchView.svelte`, wire
+   `keydown` on the results container (↓/↑ move focus across the flattened, collapse-aware hit
+   list; Enter calls `onJump` on the focused hit; skip collapsed groups' hits when navigating).
 
 4. **Tool-name + current-session filters — NOT STARTED.** Two independent, additive filters:
-   - **Tool-name filter**: restrict to `tool_use`/`tool_result` blocks for a specific tool (e.g. only
-     `Bash` or `Edit` calls). The extracted text for `tool_use` blocks already starts with the tool
-     name (see §5), so this could be a `LIKE`/prefix filter on `text` rather than a schema change —
-     confirm the exact extraction format in `search/extract.rs` before committing to a query shape.
-   - **Current-session-only filter**: a simple UI toggle that sets `filters.sources`/a new
-     `session_path` filter to the currently-open session's path; needs one new optional field on
-     `SearchFilters` (`session_path: Option<String>`) plus a `WHERE b.session_path = ?` clause in
-     `candidate_sql`.
-   - Explicitly **out of scope**: model/git-branch filtering — would require adding new columns to
-     `blocks`/`session_files` and repopulating the index (bigger lift, not requested).
+   - **Tool-name filter**: restrict to `tool_use`/`tool_result` blocks for a specific tool (e.g.
+     only `Bash` or `Edit` calls). Likely a `LIKE` prefix filter on `blocks.text` (tool_use text
+     starts with the tool name per §5 extraction rules); confirm the exact format in
+     `search/extract.rs` before committing.
+   - **Current-session-only filter**: restrict search to the currently-open session's path. Needs
+     one new optional `session_path: Option<String>` on `SearchFilters` + a `WHERE b.session_path =
+     ?` clause in `candidate_sql`.
+   - Explicitly **out of scope**: model/git-branch filtering (needs new columns + reindex).
 
-Priority order if resumed: **#2 (pagination) first** (real perf payoff, matches the user's stated
-concern), then **#3 (keyboard nav)** and **#4 (tool-name + current-session filters)** as smaller
-additive follow-ups, roughly in either order.
+Priority if resumed: #3 (keyboard nav) first — smallest lift, highest feel-improvement — then #4
+(tool-name + current-session filters) as additive follow-ups.
 
 ## 1. Goal
 
