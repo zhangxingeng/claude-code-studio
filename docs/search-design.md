@@ -15,6 +15,59 @@ wired into `src/routes/+page.svelte` (new **Search** view) with jump-to-hit in `
 
 Original spec follows.
 
+---
+
+## Phase 2 — VS Code parity follow-ups (2026-07-03)
+
+User feedback after using Phase 1: results should read like VS Code's search panel (per-file
+match previews — already true), collapsible per-file groups, pagination to cut loading overhead,
+and richer filtering. Status of each:
+
+1. **Collapsible per-session groups — DONE 2026-07-03.** `SearchView.svelte`: each group header is
+   now a `<button>` with a `▾`/`▸` chevron; clicking toggles a local `collapsed: Set<sessionPath>`
+   `$state`, reset via `$effect` whenever `search.query` changes (new search = fresh result set).
+   Purely a frontend change, no backend/store changes needed.
+
+2. **Real pagination / backend limit — NOT STARTED, highest-value remaining item.** Today
+   `query::search_streaming` (in `search/query.rs`) scans and streams *every* matching block over
+   the `Channel<SearchHit>` on every keystroke; `search.svelte.ts`'s `MAX_DISPLAY_HITS = 1000` only
+   stops the **frontend** from appending more — the Rust scan, snippet-building, and IPC sends for
+   hits past 1000 still happen. For a broad query over a large history this is real wasted work per
+   keystroke, which is the "loading overhead" the user flagged.
+   - Plan: add a `limit: usize` (e.g. matching `MAX_DISPLAY_HITS`, or a smaller page size like 100–200)
+     to the `search` Tauri command / `SearchFilters`-adjacent params. `search_streaming` stops emitting
+     (and the caller stops scanning further candidate blocks) once `summary.hits >= limit`, returning
+     `summary.truncated = true` (rename/reuse the existing frontend `truncated` flag, currently derived
+     client-side).
+   - Frontend: replace the fixed display cap with a "Load more" affordance (button or
+     `IntersectionObserver` at the list bottom) that reruns/continues the search with a larger limit
+     or an offset/cursor. Simplest first cut: re-issue the same search with `limit` bumped by one page
+     (candidate order is already stable/recency-sorted per §10, so this is safe) rather than building
+     real OFFSET-based paging.
+   - Keep this scoped to warm-tier `search_streaming`; the cold-tier fallback loop in `state.rs::search`
+     should also respect the same limit/early-exit.
+
+3. **Keyboard navigation — NOT STARTED.** No ↑/↓ + Enter to move between hits today (mouse-only).
+   Plan: track a "focused hit" index in `search.svelte.ts` or locally in `SearchView.svelte`, wire
+   `keydown` on the results container (↓/↑ move focus across the flattened, collapse-aware hit list;
+   Enter calls `onJump` on the focused hit; skip collapsed groups' hits when navigating).
+
+4. **Tool-name + current-session filters — NOT STARTED.** Two independent, additive filters:
+   - **Tool-name filter**: restrict to `tool_use`/`tool_result` blocks for a specific tool (e.g. only
+     `Bash` or `Edit` calls). The extracted text for `tool_use` blocks already starts with the tool
+     name (see §5), so this could be a `LIKE`/prefix filter on `text` rather than a schema change —
+     confirm the exact extraction format in `search/extract.rs` before committing to a query shape.
+   - **Current-session-only filter**: a simple UI toggle that sets `filters.sources`/a new
+     `session_path` filter to the currently-open session's path; needs one new optional field on
+     `SearchFilters` (`session_path: Option<String>`) plus a `WHERE b.session_path = ?` clause in
+     `candidate_sql`.
+   - Explicitly **out of scope**: model/git-branch filtering — would require adding new columns to
+     `blocks`/`session_files` and repopulating the index (bigger lift, not requested).
+
+Priority order if resumed: **#2 (pagination) first** (real perf payoff, matches the user's stated
+concern), then **#3 (keyboard nav)** and **#4 (tool-name + current-session filters)** as smaller
+additive follow-ups, roughly in either order.
+
 ## 1. Goal
 
 VS Code-style search across all Claude Code history: fast, substring/regex, streaming results,

@@ -47,6 +47,21 @@
   let fromISO = $state('');
   let toISO = $state('');
 
+  // Per-session collapse state (VS Code-style: click a file header to fold its
+  // matches away). Reset whenever the query changes, since a new search means
+  // a new result set.
+  let collapsed = $state<Set<string>>(new Set());
+  function toggleCollapse(sessionPath: string): void {
+    const next = new Set(collapsed);
+    if (next.has(sessionPath)) next.delete(sessionPath);
+    else next.add(sessionPath);
+    collapsed = next;
+  }
+  $effect(() => {
+    search.query;
+    collapsed = new Set();
+  });
+
   function onDate(): void {
     setDateRange(fromISO, toISO);
   }
@@ -207,20 +222,26 @@
   <div class="results">
     {#each groups as g (g.sessionPath)}
       <div class="group">
-        <div class="group-head" title={g.sessionPath}>
+        <button
+          class="group-head" title={g.sessionPath}
+          onclick={() => toggleCollapse(g.sessionPath)} type="button"
+          aria-expanded={!collapsed.has(g.sessionPath)}>
+          <span class="g-chevron">{collapsed.has(g.sessionPath) ? '▸' : '▾'}</span>
           <span class="g-project">{g.project}</span>
           <span class="g-file">{basename(g.sessionPath)}</span>
           <span class="g-count">{g.hits.length}</span>
-        </div>
-        {#each g.hits as h (h.uuid + ':' + h.lineNo + ':' + h.blockNo)}
-          {@const badge = sourceBadge(h.source)}
-          <button class="hit" onclick={() => onJump(h)} type="button" title={fmtDate(h.ts)}>
-            <span class="hit-badge {badge.cls}">{badge.label}</span>
-            <span class="hit-snippet">
-              {#each highlight(h.snippet, h.matchRanges) as seg}{#if seg.hl}<mark>{seg.t}</mark>{:else}{seg.t}{/if}{/each}
-            </span>
-          </button>
-        {/each}
+        </button>
+        {#if !collapsed.has(g.sessionPath)}
+          {#each g.hits as h (h.uuid + ':' + h.lineNo + ':' + h.blockNo)}
+            {@const badge = sourceBadge(h.source)}
+            <button class="hit" onclick={() => onJump(h)} type="button" title={fmtDate(h.ts)}>
+              <span class="hit-badge {badge.cls}">{badge.label}</span>
+              <span class="hit-snippet">
+                {#each highlight(h.snippet, h.matchRanges) as seg}{#if seg.hl}<mark>{seg.t}</mark>{:else}{seg.t}{/if}{/each}
+              </span>
+            </button>
+          {/each}
+        {/if}
       </div>
     {/each}
 
@@ -291,10 +312,15 @@
   .results { display: flex; flex-direction: column; gap: 0.9rem; }
   .group { display: flex; flex-direction: column; }
   .group-head {
-    display: flex; align-items: baseline; gap: 0.5rem;
+    display: flex; align-items: baseline; gap: 0.5rem; width: 100%;
     padding: 0.3rem 0.15rem; font-size: 0.76rem; border-bottom: 1px solid var(--border);
-    position: sticky; top: 0;
+    position: sticky; top: 0; background: var(--bg);
+    font-family: inherit; color: inherit; text-align: left;
+    border-left: none; border-right: none; border-top: none;
+    cursor: pointer;
   }
+  .group-head:hover { background: var(--bg-subtle); }
+  .g-chevron { flex: 0 0 auto; color: var(--text-faint); font-size: 0.65rem; width: 0.8rem; }
   .g-project { font-weight: 600; color: var(--text); }
   .g-file { color: var(--text-faint); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .g-count { margin-left: auto; color: var(--text-faint); }
