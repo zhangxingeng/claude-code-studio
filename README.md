@@ -6,7 +6,7 @@ JSON.
 
 **Offline** · **Your data never leaves your machine** · **Open source, MIT licensed**
 
-![Deck — a session rendered as a clean conversation with version diffs and the save bar](docs/hero.png)
+![Deck — a session rendered as a clean conversation with version diffs and the save bar](project_docs/hero.png)
 
 <!-- TODO: capture a short demo GIF walking session → settings edit → launch, and drop it here. -->
 
@@ -116,7 +116,7 @@ plain TypeScript so it's easy to test and reason about. Full command contract an
 ```
 src-tauri/  Rust — native file access only (reads ~/.claude, settings.json tiers, search index)
 src/lib/    TypeScript — pure logic (parsing, session model) + Tauri API wrappers
-src/routes/ Svelte 5 — the UI (browse / view / edit / search / settings)
+src/routes/ Svelte 5 — the UI (browse+search / view / edit / settings)
 ```
 
 ### Build from source
@@ -143,7 +143,7 @@ bug reports, docs fixes, or just telling us something's confusing.
   run before opening one (`pnpm check`, `cargo test --lib`, `pnpm build`), and the PR template will
   walk you through the rest.
 - **Not sure where to start?** Docs fixes and README improvements never need an issue first — just
-  open a PR. For code, `docs/roadmap.md` tracks what's shipped, what's planned, and what's been
+  open a PR. For code, `project_docs/roadmap.md` tracks what's shipped, what's planned, and what's been
   explicitly deferred, which is a good way to find something that isn't already spoken for.
 
 The guiding principle for any change: **simple by default, advanced on demand.** If you're not sure

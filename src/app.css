@@ -4,6 +4,15 @@
 :root {
   color-scheme: light;
 
+  /* Live height of .app-header, kept in sync by a ResizeObserver in +page.svelte.
+     Any second-level sticky bar (e.g. BrowseView's .search-bar) must use
+     `top: var(--header-h)` instead of `top: 0` — otherwise, once both the header
+     and the bar are pinned, the bar sticks to the same y=0 and ends up visually
+     covered by the header (which sits above it via a higher z-index). The
+     fallback here only matters for the one frame before JS measures the real
+     height. */
+  --header-h: 56px;
+
   --bg: #fafafa;
   --bg-card: #ffffff;
   --bg-subtle: #f1f5f9;
@@ -41,7 +50,14 @@
 
 * { box-sizing: border-box; }
 
-html, body { height: 100%; }
+/* Only html gets a definite height. If body also had height:100% (a definite
+   value), a session longer than one viewport would still cap body's own box
+   at 100vh — overflow:visible lets the content spill past it, but a sticky
+   descendant's containing block stays that capped box, so .app-header would
+   stop sticking as soon as you scrolled past the first viewport. body's
+   min-height:100vh below already covers the "fill a short page" case, and
+   leaving height unset here lets it grow to the real content height instead. */
+html { height: 100%; }
 
 body {
   margin: 0;
@@ -115,18 +131,6 @@ a { color: var(--accent-user); }
 .welcome h2 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.5rem; }
 .welcome p { color: var(--text-muted); font-size: 0.85rem; margin: 0.4rem 0 1.5rem; }
 .empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--text-faint); font-size: 0.85rem; }
-
-/* Browse: search + sort bar */
-.toolbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1.25rem; }
-.toolbar input[type='search'] {
-  flex: 1; padding: 0.45rem 0.75rem; border-radius: 0.4rem;
-  border: 1px solid var(--border-strong); background: var(--bg-card); color: var(--text);
-  font-size: 0.82rem; font-family: inherit;
-}
-.toolbar select {
-  padding: 0.45rem 0.6rem; border-radius: 0.4rem; border: 1px solid var(--border-strong);
-  background: var(--bg-card); color: var(--text); font-size: 0.78rem; font-family: inherit; cursor: pointer;
-}
 
 /* Session list */
 .project-group { margin-bottom: 1.5rem; }

@@ -1,7 +1,7 @@
 # Deck — Roadmap
 
-Status: **Phases 1–4 shipped in v0.5.0/v0.6.0**, committed on `main`. This doc replaces the
-open-ended "Search Phase 2" tail in `docs/search-design.md` (that doc's own Phase 2 section is now
+Status: **Phases 1–6 shipped through v0.7.0**, committed on `main`. This doc replaces the
+open-ended "Search Phase 2" tail in `project_docs/search-design.md` (that doc's own Phase 2 section is now
 marked done and points here).
 
 ## Why the pivot
@@ -82,7 +82,7 @@ set where.
 
 ## Phase 4 — Search Phase 2 cleanup (DONE)
 
-Closes out the two items `docs/search-design.md` left "NOT STARTED":
+Closes out the two items `project_docs/search-design.md` left "NOT STARTED":
 
 - **Keyboard navigation**: `SearchView.svelte` tracks a `focusedIdx` over the flattened,
   collapse-aware hit list (`visibleHits`, derived from non-collapsed groups only). ↓/↑ on the
@@ -145,40 +145,38 @@ the conversation currently is — wouldn't have shown up in Deck's own list eith
 - **Needs an app rebuild** (`cargo tauri build`) to ship — this touches Rust (`SessionMeta`), so a
   plain frontend redeploy isn't enough.
 
-## Phase 6 — Chat viewer & Browse polish (planned, not started)
+## Phase 6 — Chat viewer & Browse polish (DONE)
 
-Ideas raised by the founder while using the app day-to-day (2026-07-04). None of these are
-implemented yet — recorded here so they aren't lost.
+Ideas raised by the founder while using the app day-to-day (2026-07-04), all shipped same day:
 
-1. **Back-to-top button in the chat viewer.** `SessionEditor.svelte` has no way to jump back to the
-   top of a long session without manually scrolling — add a floating button that appears once
-   scrolled past some threshold.
-2. **Always-floating top nav bar in the chat view.** The app header (`+page.svelte`'s
-   `.app-header`) should stay pinned at the top of the viewport while scrolling through a session,
-   not scroll away with the page. Check current `app.css` for whether it's already
-   `position: sticky`/`fixed` and fix if not.
-3. **Replace Browse's search box with the global Search engine.** `BrowseView.svelte`'s search
-   today is a plain substring match on title/project with a separate sort dropdown
-   (newest/oldest/title) as the only other control. Founder's call: retire that separate box and
-   point Browse's search at the same engine/filters `SearchView.svelte` already has (case/whole-word/
-   regex toggles, source filters, date range), scoped to session titles/metadata rather than full
-   message content — not two disconnected search boxes. Needs a design pass on how the two views
-   relate (does Browse embed a mode of SearchView, or share the same store?).
-4. **Search within a single open chat.** Closes the known gap from Phase 4 / `docs/search-design.md`:
-   `SearchView`'s "This session only" filter and `sessionOnly`/`currentSessionPath` plumbing already
-   work and are tested, but there's no live entry point from inside an open session — only
-   Browse → Search reaches the view today, and by then `current` is cleared. Add a "search this
-   chat" entry point from `SessionEditor.svelte`/the viewer header that opens Search pre-scoped to
-   the open session.
-5. **Show the chat's title inside the chat viewer itself, with inline rename.** Today the title only
-   shows in the Browse list (`BrowseView.svelte`'s per-card rename); the open viewer
-   (`SessionEditor.svelte`, `+page.svelte` header) shows project + turn count but not the title. Add
-   the title to the viewer (header or `SessionMetaCard.svelte`) and let it be renamed from there
-   too — useful for finding/resuming a session by name without going back to Browse.
-6. **"Resume" action in the Browse list, not just the open viewer.** `+page.svelte`'s header
-   "Resume" button only exists once a session is open; add the same action (copy the
-   `claude --resume` command / open in terminal) to each session card in `BrowseView.svelte`,
-   alongside the existing per-card Rename.
+1. **Back-to-top button.** `SessionEditor.svelte` now shows a floating bottom-right button once
+   scrolled past ~600px, smooth-scrolling back to the top. Placed bottom-right (not the vertically-
+   centered right edge `SaveRail` uses) so the two floating controls never overlap.
+2. **Sticky app header.** Root cause was `html, body { height: 100% }` in `app.css` capping
+   `.app-header`'s sticky containing block at one viewport. Fixed: only `html` gets `height: 100%`;
+   `body` keeps its own `min-height: 100vh` and grows with content.
+3. **Browse's search box replaced by the global Search engine.** `BrowseView.svelte` and
+   `SearchView.svelte` are fully merged into one view: an always-visible advanced search bar
+   (case/whole-word/regex, source/date/tool-name/project filters) sits above the project-grouped
+   session list. Empty query shows the browse list unchanged; a typed query nests results
+   project → chat (by resolved title) → matching lines, reusing the same `search.svelte.ts` engine.
+   `SearchView.svelte` deleted; `+page.svelte`'s `'search'` view state removed.
+4. **Search within a single open chat.** New `InlineSearchPanel.svelte` — "find in this chat" —
+   reuses `search.svelte.ts` with `sessionOnly` forced on, a trimmed filter set (query +
+   case/whole-word/regex + tool-name), and a flat hit list. Toggled via a button above the message
+   list or Ctrl/Cmd+F (intercepted so the browser's own find bar never opens). Clicking a hit or
+   pressing Enter scrolls straight to that message.
+5. **Chat title + inline rename inside the viewer.** New `extractCustomTitle()` (`parser.ts`) scans
+   the full raw file for the last real `custom-title` entry — needed because `Session.meta.title` is
+   derived fresh from the first user message and has no concept of a prior rename. Shown as a
+   heading above `SessionMetaCard`, with a Rename button reusing `sessionOps.ts`'s `renameSession`.
+   The Rename button is disabled while the session has unsaved edits, since the rename writes
+   straight to disk independent of the in-memory edit draft — renaming mid-edit could otherwise let
+   a later Save silently overwrite the rename, or a post-rename reload silently discard the edits.
+6. **"Resume" action on Browse-list cards.** Every session card (browse mode) and search-result
+   header (search mode) now has a hover-revealed Resume button, reusing the same
+   `resumeInTerminal`/clipboard-copy sequence the open viewer's header Resume button already used —
+   no need to open the session first.
 
 ## Verification performed
 
@@ -189,10 +187,10 @@ implemented yet — recorded here so they aren't lost.
 - Full-repo grep confirms no remaining "Claude Code Studio" / "claude-code-studio" strings except
   the intentionally-left npm package name (`package.json`'s `"name"` field — cosmetic, not
   user-facing) — the same call already made for the Cargo crate name.
-- **Not performed**: live GUI/browser verification of `SettingsView.svelte` and the search
-  keyboard-nav/filter UI — the Chrome browser-automation extension wasn't connected in this
-  session. Founder should do a visual pass before shipping, per the standing project convention
-  that GUI verification happens on the founder's machine.
+- **Not performed**: live GUI/browser verification of `SettingsView.svelte`, the merged Browse+Search
+  UI, or any of the six Phase 6 items above — the Chrome browser-automation extension wasn't
+  connected on the day any of this was built. Founder should do a visual pass before shipping, per
+  the standing project convention that GUI verification happens on the founder's machine.
 
 ## Open follow-ups (not done here)
 

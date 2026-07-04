@@ -13,7 +13,7 @@ itself. (E.g. "I can't tell which settings tier a value came from without openin
 **What's your proposed solution?**
 What would you want Deck to do instead?
 
-**Have you checked `docs/roadmap.md`?**
+**Have you checked `project_docs/roadmap.md`?**
 Some ideas are already planned, in progress, or explicitly deferred with reasoning. If your idea
 overlaps with something there, link it and add any new context you have — that's more useful than
 a duplicate.

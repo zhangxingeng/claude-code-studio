@@ -37,7 +37,8 @@
   } from '$lib/api';
   import { copyToClipboard } from '$lib/copy';
   import { resumeCommand } from '$lib/resume';
-  import { parseJsonl } from '$lib/parser';
+  import { parseJsonl, extractMeta, extractCustomTitle } from '$lib/parser';
+  import { renameSession } from '$lib/sessionOps';
   import {
     buildDraft,
     serializeDraft,
@@ -57,6 +58,7 @@
   import ToolGroup from './ToolGroup.svelte';
   import SaveRail from './SaveRail.svelte';
   import RawJsonModal from './RawJsonModal.svelte';
+  import InlineSearchPanel from './InlineSearchPanel.svelte';
 
   // ── Props ──────────────────────────────────────────────────────────────────
   let {
@@ -87,6 +89,20 @@
   // Windowing — cap rendered display items so huge sessions stay responsive.
   let visibleCount = $state(300);
 
+  // Find-in-chat — reuses the shared search store, scoped to this one session.
+  let searchOpen = $state(false);
+
+  // Back-to-top — shown once the page has scrolled past the header.
+  let showBackToTop = $state(false);
+
+  // Title + inline rename — same renameSession() BrowseView's list uses, applied
+  // directly to this open file. Optimistic override avoids a full reparse.
+  let titleOverride = $state<string | null>(null);
+  let renamingTitle = $state(false);
+  let titleRenameInput = $state('');
+  let titleRenameError = $state<string | null>(null);
+  let titleRenameConfirming = $state(false);
+
   // Modals
   let showSaveModal = $state(false);
   let showDiscardModal = $state(false);
@@ -105,6 +121,16 @@
 
   // ── Derived ──────────────────────────────────────────────────────────────
   let sessionInfo = $derived(rawText ? extractSessionInfo(rawText) : null);
+  // A rename can land anywhere in the file, so scan the whole raw text (not
+  // just the browse list's 50-line preview) for a real custom-title entry;
+  // fall back to the first-user-message title extractMeta() derives.
+  let derivedTitle = $derived.by(() => {
+    if (!rawText) return '';
+    const custom = extractCustomTitle(rawText);
+    if (custom) return custom;
+    return extractMeta(rawText.split('\n')).title;
+  });
+  let displayTitle = $derived(titleOverride ?? derivedTitle);
   let dirty = $derived(draft ? isDirty(draft) : false);
   let changeCount = $derived.by(() => {
     if (!draft) return 0;
@@ -234,6 +260,30 @@
     };
   });
 
+  // Ctrl/Cmd+F opens find-in-chat instead of the browser's own find bar.
+  onMount(() => {
+    function onKeydown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        searchOpen = true;
+      }
+    }
+    window.addEventListener('keydown', onKeydown);
+    return () => window.removeEventListener('keydown', onKeydown);
+  });
+
+  // Back-to-top button visibility — the whole page scrolls (no inner container).
+  onMount(() => {
+    function onScroll() {
+      showBackToTop = window.scrollY > 600;
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  });
+  function scrollToTop(): void {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
   // Expose the exit guard to the parent header's ← Back button.
   $effect(() => { requestExit = attemptExit; });
 
@@ -344,6 +394,47 @@
       return null;
     } catch (e) {
       return e instanceof Error ? e.message : 'Invalid JSON.';
+    }
+  }
+
+  // ── Title rename (immediate, direct file write — same as BrowseView) ───────
+  function startTitleRename() {
+    renamingTitle = true;
+    titleRenameInput = displayTitle;
+    titleRenameError = null;
+  }
+  function cancelTitleRename() {
+    renamingTitle = false;
+    titleRenameInput = '';
+    titleRenameError = null;
+    titleRenameConfirming = false;
+  }
+  function requestTitleRename() {
+    const t = titleRenameInput.trim();
+    if (!t) {
+      titleRenameError = 'Title cannot be empty.';
+      return;
+    }
+    titleRenameError = null;
+    titleRenameConfirming = true;
+  }
+  // Reloads rawText/draft from disk after the rename write — safe only because
+  // the Rename control is disabled while dirty, so there are no in-memory
+  // edits this reload could silently discard.
+  async function confirmTitleRename() {
+    if (!titleRenameConfirming) return;
+    const newTitle = titleRenameInput.trim();
+    titleRenameConfirming = false;
+    try {
+      await renameSession(path, newTitle);
+      const fresh = await readSession(path);
+      rawText = fresh;
+      draft = buildDraft(fresh, path, Math.floor(Date.now() / 1000));
+      titleOverride = newTitle;
+      renamingTitle = false;
+      showToast('Renamed.');
+    } catch (e) {
+      titleRenameError = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -498,9 +589,49 @@
     </div>
   {/if}
 
+  <!-- ── Title + inline rename ──────────────────────────────────────────────── -->
+  <div class="viewer-title-row">
+    {#if renamingTitle}
+      <div class="rename-editor">
+        <input
+          type="text" class="rename-input" bind:value={titleRenameInput}
+          aria-label="New session title"
+          onkeydown={(e) => {
+            if (e.key === 'Enter') requestTitleRename();
+            if (e.key === 'Escape') cancelTitleRename();
+          }}
+        />
+        {#if titleRenameError}<p class="rename-error">{titleRenameError}</p>{/if}
+        <div class="rename-actions">
+          <button type="button" class="btn btn--sm btn--primary" onclick={requestTitleRename}>Save</button>
+          <button type="button" class="btn btn--sm btn--ghost" onclick={cancelTitleRename}>Cancel</button>
+        </div>
+      </div>
+    {:else}
+      <h2 class="viewer-title" title={displayTitle}>{displayTitle}</h2>
+      <button
+        type="button" class="btn btn--ghost btn--sm"
+        onclick={startTitleRename}
+        disabled={dirty}
+        title={dirty ? 'Save or discard your edits before renaming' : 'Rename this session'}
+      >Rename</button>
+    {/if}
+  </div>
+
   <!-- ── Metadata card ──────────────────────────────────────────────────────── -->
   {#if sessionInfo}
     <SessionMetaCard info={sessionInfo} />
+  {/if}
+
+  <!-- ── Find in chat ───────────────────────────────────────────────────────── -->
+  {#if searchOpen}
+    <InlineSearchPanel sessionPath={path} onJump={jumpTo} onClose={() => (searchOpen = false)} />
+  {:else}
+    <div class="find-toggle-row">
+      <button class="btn btn--ghost btn--sm" onclick={() => (searchOpen = true)} type="button">
+        🔍 Find in chat <span class="find-toggle-row__kbd">Ctrl+F</span>
+      </button>
+    </div>
   {/if}
 
   <!-- ── Messages + tool groups ─────────────────────────────────────────────── -->
@@ -563,6 +694,28 @@
     onHistory={openHistory}
   />
 
+  <!-- ── Back to top ─────────────────────────────────────────────────────────── -->
+  {#if showBackToTop}
+    <button
+      class="back-to-top" onclick={scrollToTop} type="button" aria-label="Back to top"
+    >↑ Top</button>
+  {/if}
+
+{/if}
+
+<!-- ── Title rename confirm modal ────────────────────────────────────────────── -->
+{#if titleRenameConfirming}
+  <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="title-rename-title">
+    <div class="modal">
+      <h3 id="title-rename-title">Rename this session?</h3>
+      <p>This updates the title saved in the chat file.</p>
+      <div class="modal__warning">This change is not backed up and cannot be undone here.</div>
+      <div class="modal__actions">
+        <button type="button" class="btn btn--ghost" onclick={() => (titleRenameConfirming = false)}>Cancel</button>
+        <button type="button" class="btn btn--primary" onclick={confirmTitleRename}>Rename</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <!-- ── Raw JSON editor modal ─────────────────────────────────────────────────── -->
@@ -687,6 +840,38 @@
   .resume-banner span:first-child { flex: 1; font-weight: 500; }
   .resume-banner__dismiss { font-size: 0.75rem; padding: 0.15rem 0.4rem; opacity: 0.6; }
   .resume-banner__dismiss:hover { opacity: 1; }
+
+  /* ── Title + inline rename ─────────────────────────────────────────── */
+  .viewer-title-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.85rem; }
+  .viewer-title {
+    flex: 1; min-width: 0; font-size: 1.05rem; font-weight: 600; margin: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .rename-editor { flex: 1; display: flex; flex-direction: column; gap: 0.35rem; }
+  .rename-input {
+    width: 100%; padding: 0.4rem 0.65rem; border-radius: 0.35rem;
+    border: 1px solid var(--border-strong); background: var(--bg-subtle); color: var(--text);
+    font-family: var(--font-sans); font-size: 0.85rem; line-height: 1.4;
+  }
+  .rename-input:focus { outline: 2px solid var(--accent-user); outline-offset: 1px; }
+  .rename-actions { display: flex; gap: 0.4rem; }
+  .rename-error { font-size: 0.75rem; color: var(--accent-result-err); margin: 0; }
+
+  /* ── Find-in-chat toggle ────────────────────────────────────── */
+  .find-toggle-row { margin-bottom: 0.75rem; }
+  .find-toggle-row__kbd { color: var(--text-faint); font-size: 0.7rem; margin-left: 0.3rem; }
+
+  /* ── Back to top ──────────────────────────────────────────────  */
+  /* Bottom-right, clear of SaveRail (which is vertically centered at the
+     same right edge) so the two floating controls never overlap. */
+  .back-to-top {
+    position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 20;
+    padding: 0.45rem 0.8rem; font-size: 0.78rem;
+    background: var(--bg-card); color: var(--text-muted);
+    border: 1px solid var(--border-strong); border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16); cursor: pointer;
+  }
+  .back-to-top:hover { color: var(--text); border-color: var(--accent-user); }
 
   /* ── Load more ──────────────────────────────────────────────── */
   .load-more {

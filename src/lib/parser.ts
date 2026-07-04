@@ -321,6 +321,31 @@ export function extractMeta(
 }
 
 // ---------------------------------------------------------------------------
+// extractCustomTitle — resolve a real rename from full raw JSONL text
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan full raw JSONL text (not just a preview) for a `custom-title` entry —
+ * written by the real CLI's `/rename` and by sessionOps.ts's renameSession().
+ * Last-seen wins, matching the "whole-file, last-seen" scan `list_sessions`
+ * does server-side for `SessionMeta.custom_title`. Returns '' if none exists,
+ * so callers can fall back to extractMeta()'s first-user-message title.
+ */
+export function extractCustomTitle(rawText: string): string {
+  let title = '';
+  for (const line of rawText.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let raw: RawEntry;
+    try { raw = JSON.parse(trimmed) as RawEntry; } catch { continue; }
+    if (raw['type'] === 'custom-title' && typeof raw['customTitle'] === 'string') {
+      title = raw['customTitle'] as string;
+    }
+  }
+  return title;
+}
+
+// ---------------------------------------------------------------------------
 // decodeProject — human-readable project name from encoded dir name
 // ---------------------------------------------------------------------------
 

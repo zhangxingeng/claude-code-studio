@@ -1,6 +1,6 @@
 {
   "name": "claude-code-studio",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Deck — an offline desktop control center for Claude Code: browse history, edit settings, and launch it your way.",
   "type": "module",
   "packageManager": "pnpm@11.9.0",

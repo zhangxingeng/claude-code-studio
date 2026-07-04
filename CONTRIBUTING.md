@@ -8,7 +8,7 @@ help (code, bug reports, docs, design feedback) is welcome.
 - **Report a bug.** [Open an issue](https://github.com/zhangxingeng/deck/issues/new?template=bug_report.md)
   with your OS, Deck version (shown in the footer), and steps to reproduce.
 - **Suggest a feature.** [Open a feature request](https://github.com/zhangxingeng/deck/issues/new?template=feature_request.md).
-  Check `docs/roadmap.md` first — your idea might already be planned or explicitly deferred, in
+  Check `project_docs/roadmap.md` first — your idea might already be planned or explicitly deferred, in
   which case a 👍 on the existing note is more useful than a duplicate issue.
 - **Improve the docs.** README clarity, typos, a missing FAQ answer — all fair game, no issue
   needed, just open a PR.

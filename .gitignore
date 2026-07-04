@@ -15,3 +15,6 @@ vite.config.ts.timestamp-*
 # Real chat history must never be committed (mock fixtures under tests/ are fine)
 *.jsonl
 !tests/mock_data/**/*.jsonl
+
+# Nested/embedded repo: personal ai-first-docs scaffolding cloned alongside this project
+/ai-first-docs/

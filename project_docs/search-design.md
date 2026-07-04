@@ -5,9 +5,9 @@ current-session filters, as of 2026-07-04.** Backend: `src-tauri/src/search/{db,
 query,state}.rs` — 30 unit/integration tests green. Frontend: `src/lib/search.svelte.ts` (store),
 `src/lib/components/SearchView.svelte`, wired into `src/routes/+page.svelte` (**Search** view) with
 jump-to-hit in `SessionEditor.svelte`. Phase 2's final two items (keyboard nav, tool-name/session
-filters) are now done — see `docs/roadmap.md` §Phase 4 for what shipped and the one known gap
+filters) are now done — see `project_docs/roadmap.md` §Phase 4 for what shipped and the one known gap
 (no live entry point yet for "search within this session"). This doc is otherwise historical; new
-roadmap items live in `docs/roadmap.md`.
+roadmap items live in `project_docs/roadmap.md`.
 
 **Deviations from the spec below (intentional):**
 - `blocks` gained a **`uuid`** column — the frontend regroups entries into turns and flattens blocks,
@@ -63,9 +63,9 @@ and richer filtering. Status of each:
    - Explicitly **out of scope**: model/git-branch filtering (needs new columns + reindex).
    - **Known gap**: today's navigation only reaches Search from Browse, so `currentSessionPath` is
      never actually populated yet in practice — the filter is correct and unit-tested, but no UI
-     entry point passes a real session path in. See `docs/roadmap.md` §Phase 6, item 4.
+     entry point passes a real session path in. See `project_docs/roadmap.md` §Phase 6, item 4.
 
-See `docs/roadmap.md` for what came after Search Phase 2 — the wider Deck rebrand, settings editor,
+See `project_docs/roadmap.md` for what came after Search Phase 2 — the wider Deck rebrand, settings editor,
 and terminal launcher.
 
 ## 1. Goal

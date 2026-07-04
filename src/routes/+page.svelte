@@ -2,7 +2,7 @@
   /**
    * +page.svelte — top-level SPA shell for Deck (Claude Code Control Center).
    *
-   * States: browse | viewer | search | settings
+   * States: browse | viewer | settings — search lives inside browse (BrowseView.svelte)
    * Orchestrates: session loading, subagent linking, HTML export, theme toggle.
    */
   import { onMount, tick } from 'svelte';
@@ -20,16 +20,15 @@
   import BrowseView from '$lib/components/BrowseView.svelte';
   import SessionView from '$lib/components/SessionView.svelte';
   import SessionEditor from '$lib/components/SessionEditor.svelte';
-  import SearchView from '$lib/components/SearchView.svelte';
   import SettingsView from '$lib/components/SettingsView.svelte';
 
   // Inline app.css for the standalone HTML export.
   import appCss from '../app.css?inline';
 
   // ── app state ─────────────────────────────────────────────────────────────
-  let view = $state<'browse' | 'viewer' | 'search' | 'settings'>('browse');
-  // Where ← Back from the viewer/settings returns to (browse, or back to search results).
-  let prevView = $state<'browse' | 'search'>('browse');
+  // 'browse' is the home view — it merges what used to be separate Browse and
+  // Search pages/views into one (see BrowseView.svelte).
+  let view = $state<'browse' | 'viewer' | 'settings'>('browse');
   // Settings view scope: null = user/global; otherwise a specific project's real cwd.
   let settingsProjectCwd = $state<string | null>(null);
   let settingsProjectLabel = $state('');
@@ -48,6 +47,10 @@
   const isTauri = () =>
     typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
+  // Header height varies with view (the viewer subtitle line adds a row), so we
+  // measure it live rather than hardcode a value — see --header-h in app.css.
+  let headerEl: HTMLElement | undefined = $state(undefined);
+
   onMount(async () => {
     if (isTauri()) {
       try {
@@ -56,6 +59,16 @@
         console.error('[app] getVersion failed', e);
       }
     }
+  });
+
+  onMount(() => {
+    if (!headerEl) return;
+    const setVar = () =>
+      document.documentElement.style.setProperty('--header-h', `${headerEl!.offsetHeight}px`);
+    setVar();
+    const ro = new ResizeObserver(setVar);
+    ro.observe(headerEl);
+    return () => ro.disconnect();
   });
 
   function handleCheckForUpdates(): void {
@@ -99,25 +112,17 @@
   }
 
   function openSession(meta: SessionMeta): void {
-    prevView = 'browse';
     loadSession(meta.path, decodeProject(meta.project_raw), undefined);
   }
 
   // Open the session for a search hit and scroll to the matched message.
   function openHit(hit: SearchHit): void {
-    prevView = 'search';
     loadSession(hit.sessionPath, hit.project, hit.uuid);
-  }
-
-  function goSearch(): void {
-    view = 'search';
-    loadError = null;
   }
 
   // Open Settings: cwd=null for user/global; a real project cwd scopes it to
   // that project's tiers (called from the header gear or a project's gear).
   function goSettings(cwd: string | null, label = ''): void {
-    prevView = view === 'search' ? 'search' : 'browse';
     settingsProjectCwd = cwd;
     settingsProjectLabel = label;
     view = 'settings';
@@ -125,7 +130,7 @@
   }
 
   function backToBrowse(): void {
-    view = prevView;
+    view = 'browse';
     current = null;
     loadError = null;
     requestEditorExit = undefined;
@@ -226,7 +231,7 @@ ${contentHtml}
 </script>
 
 <!-- ── header ──────────────────────────────────────────────────────────────── -->
-<header class="app-header">
+<header class="app-header" bind:this={headerEl}>
   <div>
     <h1>Deck</h1>
     {#if view === 'viewer' && current}
@@ -238,15 +243,8 @@ ${contentHtml}
 
   <div class="app-header__actions">
     {#if view === 'browse'}
-      <button class="btn btn--sm" onclick={goSearch} type="button">
-        Search
-      </button>
       <button class="btn btn--ghost btn--sm" onclick={() => goSettings(null)} type="button">
         ⚙ Settings
-      </button>
-    {:else if view === 'search'}
-      <button class="btn btn--ghost btn--sm" onclick={() => (view = 'browse')} type="button">
-        ← Browse
       </button>
     {:else if view === 'settings'}
       <button class="btn btn--ghost btn--sm" onclick={backToBrowse} type="button">
@@ -289,9 +287,7 @@ ${contentHtml}
   {:else if loading}
     <div class="empty-state">Loading session...</div>
   {:else if view === 'browse'}
-    <BrowseView onOpen={openSession} onOpenSettings={goSettings} />
-  {:else if view === 'search'}
-    <SearchView onJump={openHit} currentSessionPath={current?.meta.sourcePath} />
+    <BrowseView onOpen={openSession} onJump={openHit} onOpenSettings={goSettings} />
   {:else if view === 'settings'}
     <SettingsView projectCwd={settingsProjectCwd} projectLabel={settingsProjectLabel} onClose={backToBrowse} />
   {:else if view === 'viewer' && current}
