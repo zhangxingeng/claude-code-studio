@@ -1,6 +1,6 @@
 # Deck — Roadmap
 
-Status: **Phases 1–4 BUILT**, on `main`, uncommitted as of 2026-07-04. This doc replaces the
+Status: **Phases 1–4 shipped in v0.5.0/v0.6.0**, committed on `main`. This doc replaces the
 open-ended "Search Phase 2" tail in `docs/search-design.md` (that doc's own Phase 2 section is now
 marked done and points here).
 
@@ -132,3 +132,38 @@ Closes out the two items `docs/search-design.md` left "NOT STARTED":
   yet have Claude Code installed.
 - Heavier JSON-Schema validation (`ajv` or similar) for the settings form, if silent type coercion
   proves too loose in practice.
+
+## Future ideas (exploratory — not planned, not scoped, no timeline)
+
+Raised by the founder while reviewing the 0.6.0 release. Recorded here so they aren't lost, but
+none of these are committed work — each needs its own design pass before becoming a real phase.
+
+- **"Ask Claude" about a setting.** Inline AI help inside `SettingsView` so a user can ask what a
+  specific field does / whether a value is sane, instead of just reading the schema description.
+  Open design question (founder's own words): per-field AI help feels like a chore to wire up
+  field-by-field, but one global "ask about this settings file" affordance might lose the specific
+  context of which field the user is confused about. Possible directions to explore later: a
+  skill-file-style prompt template fed the schema + current tier values + the field in focus;
+  or a single chat panel scoped to the currently-open tier. Needs a design pass on UX (where the
+  entry point lives) and on how it calls out to Claude (local `claude` CLI shellout? API key?)
+  before any implementation starts.
+- **Selective / smarter chat compaction.** A finer-grained alternative to Claude Code's raw
+  `/compact` for editing session history — let a user selectively condense or drop irrelevant
+  chunks of a long conversation rather than an all-or-nothing compact, aimed at complex sessions
+  where blanket compaction loses detail that still matters. Founder is unsure this is worth the
+  complexity ("actually that would be too complex... maybe not, I don't know yet") — flagged as
+  worth exploring, not worth building yet. Would likely build on the existing edit/undo/backup
+  infrastructure in `SessionEditor.svelte` rather than replacing it.
+- Both ideas sit under the same theme as Phase 2/3: **embedding real AI assistance into the control
+  center itself**, not just viewing/configuring Claude Code from the outside. Worth revisiting
+  together once one of them gets a concrete design.
+
+## Release history
+
+- **v0.5.0 (2026-07-04)** — Deck pivot (Phases 1–4 above): rebrand, settings editor, terminal
+  launcher, search cleanup. Founder tested locally (AppImage + `.deb`, after removing the
+  superseded `claude-code-studio` package) — confirmed good.
+- **v0.6.0** — Version bump after founder sign-off on the 0.5.0 Deck pivot testing pass; no
+  functional changes beyond the version bump itself. README rebrand (marketing pass, non-technical
+  section on top / technical below) and repo contribution setup (`CONTRIBUTING.md`, issue/PR
+  templates) landed alongside it — see below.
