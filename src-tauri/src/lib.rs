@@ -8,6 +8,12 @@ use tauri::Manager;
 // Search: SQLite-backed extracted-text cache (built up over milestones 1–12).
 mod search;
 
+// Deck's own preference store (terminal launcher choice + extra args).
+mod appconfig;
+
+// Schema-driven Claude Code settings: read/merge/conflict across the three tiers.
+mod settings;
+
 // ---------------------------------------------------------------------------
 // Return-type structs (must match the JS contract in ARCHITECTURE.md)
 // ---------------------------------------------------------------------------
@@ -589,9 +595,12 @@ fn fork_session(path: String, upto_index: usize) -> Result<ForkResult, String> {
     })
 }
 
-/// Best-effort: open a terminal in `cwd` running `claude --resume <session_id>`.
-/// Platform-specific and inherently unreliable (depends on what's installed);
-/// callers should always pair this with a copy-to-clipboard fallback.
+/// Best-effort: open a terminal in `cwd` running `claude --resume <session_id>`,
+/// honouring the user's persisted terminal preference + extra args (Settings →
+/// Terminal). Platform-specific and inherently unreliable (depends on what's
+/// installed); callers should always pair this with a copy-to-clipboard
+/// fallback. Default (no preference saved, or "auto") reproduces the original
+/// auto-detect behavior exactly.
 #[tauri::command]
 fn resume_in_terminal(cwd: String, session_id: String) -> Result<(), String> {
     if session_id.is_empty()
@@ -605,12 +614,21 @@ fn resume_in_terminal(cwd: String, session_id: String) -> Result<(), String> {
         return Err(format!("Directory not found: {cwd}"));
     }
 
+    let config = appconfig::load();
+    let extra_args = appconfig::parse_args(&config.terminal_args);
+    let auto = appconfig::is_auto(&config.terminal);
+
     #[cfg(target_os = "macos")]
     {
+        let mut claude_cmd = format!("claude --resume {}", session_id);
+        for a in &extra_args {
+            claude_cmd.push(' ');
+            claude_cmd.push_str(a);
+        }
         let script = format!(
-            "#!/bin/sh\ncd {} && exec claude --resume {}\n",
+            "#!/bin/sh\ncd {} && exec {}\n",
             shell_quote(&cwd),
-            session_id
+            claude_cmd
         );
         let tmp = std::env::temp_dir().join(format!("ccstudio-resume-{}.command", session_id));
         fs::write(&tmp, script).map_err(|e| e.to_string())?;
@@ -620,9 +638,12 @@ fn resume_in_terminal(cwd: String, session_id: String) -> Result<(), String> {
             perms.set_mode(0o755);
             fs::set_permissions(&tmp, perms).map_err(|e| e.to_string())?;
         }
+        // Default terminal app is "Terminal"; an advanced preference can name
+        // another (e.g. "iTerm").
+        let app = if auto { "Terminal" } else { config.terminal.trim() };
         std::process::Command::new("open")
             .arg("-a")
-            .arg("Terminal")
+            .arg(app)
             .arg(&tmp)
             .spawn()
             .map_err(|e| e.to_string())?;
@@ -631,46 +652,88 @@ fn resume_in_terminal(cwd: String, session_id: String) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        let candidates: &[(&str, &[&str])] = &[
-            ("gnome-terminal", &["--"]),
-            ("ptyxis", &["--"]),
-            ("konsole", &["-e"]),
-            ("xfce4-terminal", &["-x"]),
-            ("alacritty", &["-e"]),
-            ("xterm", &["-e"]),
-            ("x-terminal-emulator", &["-e"]),
-        ];
-        for (term, prefix) in candidates {
-            let mut cmd = std::process::Command::new(term);
-            cmd.args(*prefix)
-                .arg("claude")
-                .arg("--resume")
-                .arg(&session_id)
-                .current_dir(&cwd);
-            if cmd.spawn().is_ok() {
-                return Ok(());
+        if auto {
+            let candidates: &[(&str, &[&str])] = &[
+                ("gnome-terminal", &["--"]),
+                ("ptyxis", &["--"]),
+                ("konsole", &["-e"]),
+                ("xfce4-terminal", &["-x"]),
+                ("alacritty", &["-e"]),
+                ("xterm", &["-e"]),
+                ("x-terminal-emulator", &["-e"]),
+            ];
+            for (term, prefix) in candidates {
+                let mut cmd = std::process::Command::new(term);
+                cmd.args(*prefix)
+                    .arg("claude")
+                    .arg("--resume")
+                    .arg(&session_id)
+                    .args(&extra_args)
+                    .current_dir(&cwd);
+                if cmd.spawn().is_ok() {
+                    return Ok(());
+                }
             }
+            return Err("No supported terminal emulator found".to_string());
         }
-        return Err("No supported terminal emulator found".to_string());
+
+        // Advanced: the preference is a terminal command template, e.g.
+        // "gnome-terminal --" or "konsole -e" — the first token is the program,
+        // the rest are args that precede the `claude` invocation.
+        let tokens = appconfig::parse_args(&config.terminal);
+        let Some((program, prefix_args)) = tokens.split_first() else {
+            return Err("No terminal command configured".to_string());
+        };
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(prefix_args)
+            .arg("claude")
+            .arg("--resume")
+            .arg(&session_id)
+            .args(&extra_args)
+            .current_dir(&cwd);
+        return cmd
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Could not launch '{program}': {e}"));
     }
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args([
-                "/C",
-                "start",
-                "Claude Resume",
-                "cmd",
-                "/K",
-                "claude",
-                "--resume",
-                &session_id,
-            ])
-            .current_dir(&cwd)
+        if auto {
+            std::process::Command::new("cmd")
+                .args([
+                    "/C",
+                    "start",
+                    "Claude Resume",
+                    "cmd",
+                    "/K",
+                    "claude",
+                    "--resume",
+                    &session_id,
+                ])
+                .args(&extra_args)
+                .current_dir(&cwd)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+
+        // Advanced: the preference is a terminal command template, e.g. "wt".
+        let tokens = appconfig::parse_args(&config.terminal);
+        let Some((program, prefix_args)) = tokens.split_first() else {
+            return Err("No terminal command configured".to_string());
+        };
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(prefix_args)
+            .arg("claude")
+            .arg("--resume")
+            .arg(&session_id)
+            .args(&extra_args)
+            .current_dir(&cwd);
+        return cmd
             .spawn()
-            .map_err(|e| e.to_string())?;
-        return Ok(());
+            .map(|_| ())
+            .map_err(|e| format!("Could not launch '{program}': {e}"));
     }
 
     #[allow(unreachable_code)]
@@ -779,6 +842,10 @@ pub fn run() {
             search::state::search,
             search::state::refresh_index,
             search::state::index_status,
+            settings::read_claude_settings,
+            settings::write_claude_settings,
+            appconfig::get_app_config,
+            appconfig::set_app_config,
         ]);
 
     match search_state {

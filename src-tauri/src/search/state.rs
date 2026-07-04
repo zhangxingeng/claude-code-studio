@@ -252,6 +252,11 @@ pub async fn search(
             if cached.contains(&sp) {
                 continue; // already covered by the warm tier
             }
+            if let Some(session_path) = &filters.session_path {
+                if &sp != session_path {
+                    continue;
+                }
+            }
             let Some((project, blocks)) = index::extract_file(&path, indexer.home()) else {
                 continue;
             };

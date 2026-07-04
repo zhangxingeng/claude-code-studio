@@ -1,7 +1,7 @@
 {
   "name": "claude-code-studio",
   "version": "0.5.0",
-  "description": "Offline desktop app to browse and edit Claude Code chat history.",
+  "description": "Deck — an offline desktop control center for Claude Code: browse history, edit settings, and launch it your way.",
   "type": "module",
   "packageManager": "pnpm@11.9.0",
   "scripts": {

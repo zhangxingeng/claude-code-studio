@@ -6,7 +6,7 @@
    * streamed, session-grouped results list. Clicking a hit calls `onJump`, which
    * the shell uses to open that session and scroll to the block.
    */
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import type { SearchHit } from '$lib/types';
   import {
     search,
@@ -16,13 +16,18 @@
     toggleProject,
     clearProjects,
     setDateRange,
+    setToolName,
+    toggleSessionOnly,
     scheduleSearch,
     loadMore,
     initSearch,
     disposeSearch,
   } from '$lib/search.svelte';
 
-  let { onJump = (_h: SearchHit) => {} }: { onJump?: (hit: SearchHit) => void } = $props();
+  let {
+    onJump = (_h: SearchHit) => {},
+    currentSessionPath,
+  }: { onJump?: (hit: SearchHit) => void; currentSessionPath?: string } = $props();
 
   // Source filter presented as three friendly groups over the low-level sources.
   const SOURCE_GROUPS = [
@@ -58,9 +63,12 @@
     else next.add(sessionPath);
     collapsed = next;
   }
+  // Keyboard nav (↑/↓/Enter) over the flattened, collapse-aware hit list.
+  let focusedIdx = $state(-1);
   $effect(() => {
     search.query;
     collapsed = new Set();
+    focusedIdx = -1;
   });
 
   function onDate(): void {
@@ -123,7 +131,41 @@
       search.status.indexedSessions < search.status.totalSessions
   );
 
-  onMount(initSearch);
+  function hitKey(h: SearchHit): string {
+    return `${h.sessionPath}:${h.lineNo}:${h.blockNo}`;
+  }
+  // Hits belonging to non-collapsed groups, in display order — what ↑/↓ walks.
+  let visibleHits = $derived.by<SearchHit[]>(() =>
+    groups.filter((g) => !collapsed.has(g.sessionPath)).flatMap((g) => g.hits)
+  );
+  let focusedKey = $derived(
+    focusedIdx >= 0 && focusedIdx < visibleHits.length ? hitKey(visibleHits[focusedIdx]) : null
+  );
+
+  function scrollFocusedIntoView(): void {
+    tick().then(() => {
+      if (!focusedKey) return;
+      document.getElementById(`hit-${focusedKey}`)?.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  function onSearchKeydown(e: KeyboardEvent): void {
+    if (visibleHits.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      focusedIdx = Math.min(focusedIdx + 1, visibleHits.length - 1);
+      scrollFocusedIntoView();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      focusedIdx = Math.max(focusedIdx - 1, 0);
+      scrollFocusedIntoView();
+    } else if (e.key === 'Enter' && focusedIdx >= 0 && focusedIdx < visibleHits.length) {
+      e.preventDefault();
+      onJump(visibleHits[focusedIdx]);
+    }
+  }
+
+  onMount(() => initSearch(currentSessionPath));
   onDestroy(disposeSearch);
 </script>
 
@@ -137,6 +179,7 @@
         placeholder="Search all sessions…"
         value={search.query}
         oninput={(e) => setQuery(e.currentTarget.value)}
+        onkeydown={onSearchKeydown}
         autofocus
         spellcheck="false"
         autocomplete="off"
@@ -171,6 +214,23 @@
         <label>From <input type="date" bind:value={fromISO} onchange={onDate} /></label>
         <label>To <input type="date" bind:value={toISO} onchange={onDate} /></label>
       </div>
+
+      <div class="filter-set">
+        <input
+          type="text"
+          class="tool-name-input"
+          placeholder="Tool name (e.g. Bash)"
+          value={search.toolName}
+          oninput={(e) => setToolName(e.currentTarget.value)}
+        />
+      </div>
+
+      {#if currentSessionPath}
+        <label class="filter-set session-only">
+          <input type="checkbox" checked={search.sessionOnly} onchange={toggleSessionOnly} />
+          This session only
+        </label>
+      {/if}
 
       {#if search.availableProjects.length > 0}
         <div class="filter-set">
@@ -235,7 +295,10 @@
         {#if !collapsed.has(g.sessionPath)}
           {#each g.hits as h (h.uuid + ':' + h.lineNo + ':' + h.blockNo)}
             {@const badge = sourceBadge(h.source)}
-            <button class="hit" onclick={() => onJump(h)} type="button" title={fmtDate(h.ts)}>
+            <button
+              class="hit" class:focused={focusedKey === hitKey(h)}
+              id="hit-{hitKey(h)}"
+              onclick={() => onJump(h)} type="button" title={fmtDate(h.ts)}>
               <span class="hit-badge {badge.cls}">{badge.label}</span>
               <span class="hit-snippet">
                 {#each highlight(h.snippet, h.matchRanges) as seg}{#if seg.hl}<mark>{seg.t}</mark>{:else}{seg.t}{/if}{/each}
@@ -302,6 +365,13 @@
   .chip.on { background: color-mix(in srgb, var(--accent-user) 18%, transparent); color: var(--text); border-color: color-mix(in srgb, var(--accent-user) 40%, transparent); }
   .chip.ghost { border-style: dashed; }
 
+  .tool-name-input {
+    font-size: 0.74rem; padding: 0.22rem 0.55rem; width: 9.5rem;
+    background: var(--bg-subtle); color: var(--text); border: 1px solid var(--border); border-radius: 999px;
+  }
+  .tool-name-input:focus { border-color: var(--accent-user); outline: none; }
+  .session-only { font-size: 0.74rem; color: var(--text-muted); cursor: pointer; }
+
   .project-list {
     max-height: 190px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.1rem;
     border: 1px solid var(--border); border-radius: 0.4rem; padding: 0.35rem; background: var(--bg-card);
@@ -338,6 +408,7 @@
     border-bottom: 1px solid var(--border); cursor: pointer; color: var(--text);
   }
   .hit:hover { background: var(--bg-subtle); }
+  .hit.focused { background: color-mix(in srgb, var(--accent-user) 16%, transparent); outline: 1px solid color-mix(in srgb, var(--accent-user) 45%, transparent); outline-offset: -1px; }
   .hit-badge {
     flex: 0 0 auto; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.03em;
     padding: 0.1rem 0.35rem; border-radius: 0.25rem; margin-top: 0.1rem; white-space: nowrap;

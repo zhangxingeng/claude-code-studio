@@ -46,6 +46,16 @@ pub struct SearchFilters {
     /// Home-relative project labels to include.
     #[serde(default)]
     pub projects: Vec<String>,
+    /// Restrict to `tool_use` blocks for this exact tool name (e.g. "Bash",
+    /// "Edit"). Tool-use text is either exactly the tool name or
+    /// `"{name}\n{flattened input}"` (see `extract.rs`), so this is a prefix
+    /// match. Overrides `sources` for matching purposes: a hit must be a
+    /// `tool_use` block for this tool regardless of what's in `sources`.
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    /// Restrict results to this one session file (the "current session only" filter).
+    #[serde(default)]
+    pub session_path: Option<String>,
 }
 
 /// Returned when a search finishes (or is cancelled / truncated by limit).
@@ -151,6 +161,13 @@ pub fn build_snippet(text: &str, re: &Regex) -> Option<(String, Vec<(u32, u32)>)
     Some((snippet, ranges))
 }
 
+/// Escape `\`, `%`, `_` so a user-supplied tool name is matched literally in a
+/// `LIKE ... ESCAPE '\'` pattern (tool names aren't expected to contain SQL
+/// wildcards, but this keeps the filter correct if one ever does).
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
 /// Push a `?,?,…` placeholder group for an IN clause and its bound values.
 fn push_in_clause(
     where_parts: &mut Vec<String>,
@@ -175,7 +192,18 @@ fn candidate_sql(filters: &SearchFilters) -> (String, Vec<Value>) {
     let mut where_parts: Vec<String> = Vec::new();
     let mut params: Vec<Value> = Vec::new();
 
-    push_in_clause(&mut where_parts, &mut params, "b.source", &filters.sources);
+    if let Some(tool_name) = &filters.tool_name {
+        // A tool-name filter narrows to tool_use blocks for that tool,
+        // regardless of what `sources` says — so it replaces the sources
+        // IN-clause rather than ANDing with it (which would always be empty,
+        // since `sources` would rarely include "tool_use" and "tool_name" only
+        // makes sense there).
+        where_parts.push("(b.source = 'tool_use' AND (b.text = ? OR b.text LIKE ? ESCAPE '\\'))".to_string());
+        params.push(Value::Text(tool_name.clone()));
+        params.push(Value::Text(format!("{}\n%", escape_like(tool_name))));
+    } else {
+        push_in_clause(&mut where_parts, &mut params, "b.source", &filters.sources);
+    }
     push_in_clause(&mut where_parts, &mut params, "b.project", &filters.projects);
     if let Some(from) = filters.from {
         where_parts.push("b.ts >= ?".to_string());
@@ -184,6 +212,10 @@ fn candidate_sql(filters: &SearchFilters) -> (String, Vec<Value>) {
     if let Some(to) = filters.to {
         where_parts.push("b.ts <= ?".to_string());
         params.push(Value::Integer(to));
+    }
+    if let Some(session_path) = &filters.session_path {
+        where_parts.push("b.session_path = ?".to_string());
+        params.push(Value::Text(session_path.clone()));
     }
 
     let where_sql = if where_parts.is_empty() {
@@ -201,10 +233,19 @@ fn candidate_sql(filters: &SearchFilters) -> (String, Vec<Value>) {
     (sql, params)
 }
 
-/// Does a block pass the source + date filters? (Project is filtered per-file /
-/// in SQL, not here.)
-fn passes_source_and_date(source: &str, ts: Option<i64>, filters: &SearchFilters) -> bool {
-    if !filters.sources.is_empty() && !filters.sources.iter().any(|s| s == source) {
+/// Does a block pass the source/date/tool-name filters? (Project and session
+/// path are filtered per-file, not here — see `state.rs`'s cold-path loop.)
+fn passes_source_and_date(source: &str, text: &str, ts: Option<i64>, filters: &SearchFilters) -> bool {
+    if let Some(tool_name) = &filters.tool_name {
+        // A tool-name filter narrows to tool_use blocks for that tool,
+        // regardless of what `sources` says.
+        if source != "tool_use" {
+            return false;
+        }
+        if text != tool_name.as_str() && !text.starts_with(&format!("{tool_name}\n")) {
+            return false;
+        }
+    } else if !filters.sources.is_empty() && !filters.sources.iter().any(|s| s == source) {
         return false;
     }
     if let Some(from) = filters.from {
@@ -239,7 +280,7 @@ pub fn scan_blocks<E: FnMut(SearchHit)>(
         if let Some(max) = remaining {
             if n >= max { break; }
         }
-        if !passes_source_and_date(&b.source, b.ts, filters) {
+        if !passes_source_and_date(&b.source, &b.text, b.ts, filters) {
             continue;
         }
         if let Some((snippet, match_ranges)) = build_snippet(&b.text, re) {
@@ -425,6 +466,57 @@ mod tests {
         let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].project, "~/lib");
+    }
+
+    #[test]
+    fn tool_name_filter_matches_only_that_tool_use_block() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // Seed's only tool_use row is "Read\nfile_path: /src/bug.rs".
+        let filters = SearchFilters {
+            tool_name: Some("Read".into()),
+            ..Default::default()
+        };
+        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source, "tool_use");
+
+        // A different tool name matches nothing, even though the text matches "bug".
+        let filters = SearchFilters {
+            tool_name: Some("Write".into()),
+            ..Default::default()
+        };
+        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn tool_name_filter_overrides_sources() {
+        // A tool_name filter should narrow to that tool's tool_use blocks even
+        // when `sources` asks for something else entirely.
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let filters = SearchFilters {
+            sources: vec!["user".into()],
+            tool_name: Some("Read".into()),
+            ..Default::default()
+        };
+        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source, "tool_use");
+    }
+
+    #[test]
+    fn session_path_filter_restricts_to_one_session() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let filters = SearchFilters {
+            session_path: Some("/a.jsonl".into()),
+            ..Default::default()
+        };
+        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|h| h.session_path == "/a.jsonl"));
     }
 
     #[test]

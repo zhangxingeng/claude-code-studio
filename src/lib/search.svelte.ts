@@ -31,6 +31,9 @@ export const search = $state({
   from: null as number | null,
   to: null as number | null,
   projects: [] as string[], // selected project labels; empty = all
+  toolName: '' as string, // restrict to tool_use blocks for this tool name; '' = no restriction
+  sessionOnly: false, // when true + currentSessionPath is set, restrict to that one session
+  currentSessionPath: null as string | null, // the session the search was opened from, if any
   hits: [] as SearchHit[],
   truncated: false,
   running: false,
@@ -54,6 +57,8 @@ function currentFilters(): SearchFilters {
     from: search.from,
     to: search.to,
     projects: search.projects,
+    toolName: search.toolName.trim() || null,
+    sessionPath: search.sessionOnly ? search.currentSessionPath : null,
   };
 }
 
@@ -158,10 +163,28 @@ export function setDateRange(fromISO: string, toISO: string): void {
   scheduleSearch();
 }
 
+/** Restrict to tool_use blocks for this tool name ('' clears the restriction). */
+export function setToolName(name: string): void {
+  search.toolName = name;
+  search.limit = search.pageSize;
+  scheduleSearch();
+}
+
+/** Toggle "this session only" (a no-op if the search wasn't opened from a session). */
+export function toggleSessionOnly(): void {
+  search.sessionOnly = !search.sessionOnly;
+  search.limit = search.pageSize;
+  scheduleSearch();
+}
+
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
-/** Load the project list, kick a sweep, and start polling index status. */
-export async function initSearch(): Promise<void> {
+/** Load the project list, kick a sweep, and start polling index status.
+ *  `currentSessionPath` (if the search was opened from an open session) enables
+ *  the "this session only" filter. */
+export async function initSearch(currentSessionPath?: string): Promise<void> {
+  search.currentSessionPath = currentSessionPath ?? null;
+  if (!search.currentSessionPath) search.sessionOnly = false;
   try {
     const [sessions, home] = await Promise.all([listSessions(), homeDir()]);
     const counts = new Map<string, number>();

@@ -1,11 +1,13 @@
 # Search — Design & Implementation Plan
 
-Status: **BUILT** (all 12 milestones + Phase 2 collapsible groups & pagination, on `main`,
-committed as of 2026-07-03). Backend: `src-tauri/src/search/{db,extract,index,query,state}.rs`
-— 18 unit/integration tests green (up from 14), release build clean. Frontend:
-`src/lib/search.svelte.ts` (store), `src/lib/components/SearchView.svelte`, wired into
-`src/routes/+page.svelte` (new **Search** view) with jump-to-hit in `SessionEditor.svelte`.
-Phase 2 remaining (see below): keyboard nav, tool-name + current-session filters.
+Status: **BUILT — all 12 milestones + all of Phase 2, including keyboard nav and the tool-name /
+current-session filters, as of 2026-07-04.** Backend: `src-tauri/src/search/{db,extract,index,
+query,state}.rs` — 30 unit/integration tests green. Frontend: `src/lib/search.svelte.ts` (store),
+`src/lib/components/SearchView.svelte`, wired into `src/routes/+page.svelte` (**Search** view) with
+jump-to-hit in `SessionEditor.svelte`. Phase 2's final two items (keyboard nav, tool-name/session
+filters) are now done — see `docs/roadmap.md` §Phase 4 for what shipped and the one known gap
+(no live entry point yet for "search within this session"). This doc is otherwise historical; new
+roadmap items live in `docs/roadmap.md`.
 
 **Deviations from the spec below (intentional):**
 - `blocks` gained a **`uuid`** column — the frontend regroups entries into turns and flattens blocks,
@@ -39,23 +41,32 @@ and richer filtering. Status of each:
    All 18 Rust tests green, `pnpm check` + `pnpm build` clean. Files: `query.rs`, `state.rs`,
    `api.ts`, `search.svelte.ts`, `SearchView.svelte`, `types.ts`.
 
-3. **Keyboard navigation (↑/↓/Enter across hits) — NOT STARTED.** No ↑/↓ + Enter to move
-   between hits today (mouse-only). Plan: track a focused hit index in `SearchView.svelte`, wire
-   `keydown` on the results container (↓/↑ move focus across the flattened, collapse-aware hit
-   list; Enter calls `onJump` on the focused hit; skip collapsed groups' hits when navigating).
+3. **Keyboard navigation (↑/↓/Enter across hits) — DONE 2026-07-04.** `SearchView.svelte` tracks a
+   `focusedIdx` over `visibleHits` (hits flattened from non-collapsed groups only, in display
+   order). ↓/↑ on the search input move focus and scroll the focused hit into view (`scrollIntoView`
+   with `block: 'nearest'`); Enter jumps to the focused hit via `onJump`. Resets to -1 on every new
+   query, alongside the existing collapse-state reset.
 
-4. **Tool-name + current-session filters — NOT STARTED.** Two independent, additive filters:
-   - **Tool-name filter**: restrict to `tool_use`/`tool_result` blocks for a specific tool (e.g.
-     only `Bash` or `Edit` calls). Likely a `LIKE` prefix filter on `blocks.text` (tool_use text
-     starts with the tool name per §5 extraction rules); confirm the exact format in
-     `search/extract.rs` before committing.
-   - **Current-session-only filter**: restrict search to the currently-open session's path. Needs
-     one new optional `session_path: Option<String>` on `SearchFilters` + a `WHERE b.session_path =
-     ?` clause in `candidate_sql`.
+4. **Tool-name + current-session filters — DONE 2026-07-04.** Two independent, additive filters:
+   - **Tool-name filter**: `SearchFilters.toolName` (`tool_name: Option<String>` in Rust) restricts
+     to `tool_use` blocks whose text is exactly the tool name or starts with `"{name}\n"` (matches
+     the extraction format confirmed in `search/extract.rs` — `format!("{name}\n{}", ...)`).
+     Implemented as an escaped `LIKE ... ESCAPE '\'` prefix match in `candidate_sql`, and mirrored in
+     the cold-path `passes_source_and_date`. It **overrides** `sources` (replacing the `b.source IN
+     (...)` clause rather than ANDing with it) since a tool-name filter only makes sense against
+     `tool_use` blocks regardless of what `sources` says.
+   - **Current-session-only filter**: `SearchFilters.sessionPath` (`session_path: Option<String>`)
+     adds a `WHERE b.session_path = ?` clause in `candidate_sql`, plus a matching file-skip in the
+     cold-path directory loop in `state.rs`. Wired through the store (`search.svelte.ts`:
+     `sessionOnly` + `currentSessionPath`, set via `initSearch(currentSessionPath)`) and a "This
+     session only" checkbox in `SearchView.svelte`, shown when a session path is available.
    - Explicitly **out of scope**: model/git-branch filtering (needs new columns + reindex).
+   - **Known gap**: today's navigation only reaches Search from Browse, so `currentSessionPath` is
+     never actually populated yet in practice — the filter is correct and unit-tested, but no UI
+     entry point passes a real session path in. See `docs/roadmap.md` §"Open follow-ups".
 
-Priority if resumed: #3 (keyboard nav) first — smallest lift, highest feel-improvement — then #4
-(tool-name + current-session filters) as additive follow-ups.
+See `docs/roadmap.md` for what came after Search Phase 2 — the wider Deck rebrand, settings editor,
+and terminal launcher.
 
 ## 1. Goal
 

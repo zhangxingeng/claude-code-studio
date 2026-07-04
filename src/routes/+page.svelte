@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * +page.svelte — top-level SPA shell for Claude Code Studio.
+   * +page.svelte — top-level SPA shell for Deck (Claude Code Control Center).
    *
-   * States: browse | viewer
+   * States: browse | viewer | search | settings
    * Orchestrates: session loading, subagent linking, HTML export, theme toggle.
    */
   import { onMount, tick } from 'svelte';
@@ -21,14 +21,18 @@
   import SessionView from '$lib/components/SessionView.svelte';
   import SessionEditor from '$lib/components/SessionEditor.svelte';
   import SearchView from '$lib/components/SearchView.svelte';
+  import SettingsView from '$lib/components/SettingsView.svelte';
 
   // Inline app.css for the standalone HTML export.
   import appCss from '../app.css?inline';
 
   // ── app state ─────────────────────────────────────────────────────────────
-  let view = $state<'browse' | 'viewer' | 'search'>('browse');
-  // Where ← Back from the viewer returns to (browse, or back to search results).
+  let view = $state<'browse' | 'viewer' | 'search' | 'settings'>('browse');
+  // Where ← Back from the viewer/settings returns to (browse, or back to search results).
   let prevView = $state<'browse' | 'search'>('browse');
+  // Settings view scope: null = user/global; otherwise a specific project's real cwd.
+  let settingsProjectCwd = $state<string | null>(null);
+  let settingsProjectLabel = $state('');
   let current = $state<Session | null>(null);
   let loading = $state(false);
   let loadError = $state<string | null>(null);
@@ -107,6 +111,16 @@
 
   function goSearch(): void {
     view = 'search';
+    loadError = null;
+  }
+
+  // Open Settings: cwd=null for user/global; a real project cwd scopes it to
+  // that project's tiers (called from the header gear or a project's gear).
+  function goSettings(cwd: string | null, label = ''): void {
+    prevView = view === 'search' ? 'search' : 'browse';
+    settingsProjectCwd = cwd;
+    settingsProjectLabel = label;
+    view = 'settings';
     loadError = null;
   }
 
@@ -214,7 +228,7 @@ ${contentHtml}
 <!-- ── header ──────────────────────────────────────────────────────────────── -->
 <header class="app-header">
   <div>
-    <h1>Claude Code Studio</h1>
+    <h1>Deck</h1>
     {#if view === 'viewer' && current}
       <div class="subtitle">
         {current.meta.project} · {current.turns.length} turn{current.turns.length === 1 ? '' : 's'}
@@ -227,9 +241,16 @@ ${contentHtml}
       <button class="btn btn--sm" onclick={goSearch} type="button">
         Search
       </button>
+      <button class="btn btn--ghost btn--sm" onclick={() => goSettings(null)} type="button">
+        ⚙ Settings
+      </button>
     {:else if view === 'search'}
       <button class="btn btn--ghost btn--sm" onclick={() => (view = 'browse')} type="button">
         ← Browse
+      </button>
+    {:else if view === 'settings'}
+      <button class="btn btn--ghost btn--sm" onclick={backToBrowse} type="button">
+        ← Back
       </button>
     {:else if view === 'viewer'}
       <button class="btn btn--ghost btn--sm" onclick={handleBack} type="button">
@@ -268,9 +289,11 @@ ${contentHtml}
   {:else if loading}
     <div class="empty-state">Loading session...</div>
   {:else if view === 'browse'}
-    <BrowseView onOpen={openSession} />
+    <BrowseView onOpen={openSession} onOpenSettings={goSettings} />
   {:else if view === 'search'}
-    <SearchView onJump={openHit} />
+    <SearchView onJump={openHit} currentSessionPath={current?.meta.sourcePath} />
+  {:else if view === 'settings'}
+    <SettingsView projectCwd={settingsProjectCwd} projectLabel={settingsProjectLabel} onClose={backToBrowse} />
   {:else if view === 'viewer' && current}
     <SessionEditor
       path={current.meta.sourcePath}
@@ -290,8 +313,8 @@ ${contentHtml}
 
 <!-- ── footer ──────────────────────────────────────────────────────────────── -->
 <footer class="app-footer">
-  <a href="https://github.com/zhangxingeng/claude-code-studio" target="_blank" rel="noopener noreferrer">
-    Claude Code Studio{appVersion ? ` v${appVersion}` : ''} — offline, open-source chat history viewer
+  <a href="https://github.com/zhangxingeng/deck" target="_blank" rel="noopener noreferrer">
+    Deck{appVersion ? ` v${appVersion}` : ''} — offline, open-source control center for Claude Code
   </a>
   <button class="app-footer__check" onclick={handleCheckForUpdates} type="button">
     Check for updates

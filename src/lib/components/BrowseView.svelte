@@ -14,7 +14,13 @@
   import { extractMeta, projectLabel, cleanTitle } from '$lib/parser';
   import { renameSession } from '$lib/sessionOps';
 
-  let { onOpen }: { onOpen: (meta: SessionMeta) => void } = $props();
+  let {
+    onOpen,
+    onOpenSettings,
+  }: {
+    onOpen: (meta: SessionMeta) => void;
+    onOpenSettings?: (cwd: string, label: string) => void;
+  } = $props();
 
   // ── state ──────────────────────────────────────────────────────────────────
   let sessions = $state<SessionMeta[]>([]);
@@ -243,7 +249,18 @@
 {:else}
   {#each groups as [project, items]}
     <div class="project-group">
-      <div class="project-group__name" title={project} data-copy-text={project}>{project}</div>
+      <div class="project-group__head">
+        <div class="project-group__name" title={project} data-copy-text={project}>{project}</div>
+        {#if onOpenSettings && items[0]?.meta.cwd}
+          <button
+            type="button"
+            class="project-group__settings"
+            title="Claude Code settings for this project"
+            aria-label="Claude Code settings for this project"
+            onclick={() => onOpenSettings?.(items[0].meta.cwd, project)}
+          >⚙</button>
+        {/if}
+      </div>
 
       {#each items as s (s.meta.id)}
         <div class="session-card" class:session-card--editing={renamingId === s.meta.id}>

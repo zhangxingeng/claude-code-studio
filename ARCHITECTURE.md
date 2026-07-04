@@ -1,6 +1,6 @@
-# Claude Code Studio — Architecture & Contracts
+# Deck — Architecture & Contracts
 
-Desktop app (Tauri v2 + SvelteKit static SPA, Svelte 5 + TS). Fully offline.
+Desktop app (Tauri v2 + SvelteKit static SPA, Svelte 5 + TS) for Claude Code. Fully offline.
 Reads Claude Code chat history from `~/.claude/projects/`, renders it, allows
 editing with a versioned backup/undo system. No data ever leaves the machine.
 
