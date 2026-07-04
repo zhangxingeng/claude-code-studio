@@ -109,6 +109,77 @@ Closes out the two items `docs/search-design.md` left "NOT STARTED":
   of the existing 27, all passing (30 total, `search::query` module). `pnpm check` / `pnpm build`
   clean throughout.
 
+## Phase 5 — Rename/resume compatibility fix (DONE, 2026-07-04)
+
+Founder report: renaming a session via Deck's Browse-list rename, then trying `claude --resume` /
+`/resume` on it from the real CLI, silently failed to find it under the new name. The only
+workaround was resuming the session via Deck itself (path-based, doesn't need the title), then
+re-running the real `/rename` slash command from inside it.
+
+**Root cause**: `renameSession` wrote the new title into a fabricated `message.content` field on
+the session's `ai-title` line — a field Deck itself invented and was the only reader of. The real
+CLI's `--resume`/`/resume` picker reads a distinct `custom-title` entry
+(`{"type":"custom-title","customTitle":...}`), which is exactly what the real `/rename` slash
+command writes (confirmed by inspecting a session where the founder used it as a workaround — it
+also writes a matching `agent-name` entry alongside it). Deck's rename never touched that field, so
+the CLI never saw the new name. A second, compounding bug: Deck's Browse list only reads the first
+50 lines of a session file (`SessionMeta.preview`) for display, so even a *correct* rename landing
+later in a long conversation — which is exactly where the CLI's own `/rename` writes it, wherever
+the conversation currently is — wouldn't have shown up in Deck's own list either.
+
+**Fix**:
+- `src/lib/sessionOps.ts` — rename now appends real `custom-title` + `agent-name` entries
+  (mirroring exactly what the CLI's own `/rename` writes) instead of mutating the fabricated field.
+  Always appends, never edits an earlier line, matching how the CLI re-asserts the current title.
+- `src-tauri/src/lib.rs` — `list_sessions`'s existing one-pass whole-file scan (already used for
+  `user_count`/`models`/`cwd` etc.) now also tracks the last-seen `customTitle`, exposed as a new
+  `SessionMeta.custom_title` field, so a rename is found regardless of where in the file it lands,
+  not just the 50-line preview.
+- `src/lib/components/BrowseView.svelte` prefers `custom_title` over the preview-derived guess.
+- `src/lib/parser.ts`'s `extractMeta` no longer reads the fabricated field.
+- Two real sessions in `juror_fullstack` had the old broken rename: `central-config` (already fixed
+  by the founder's manual `/rename` workaround) and `steam-stuff` — patched directly with the
+  corrected write path during this session.
+- Rewrote `tests/title_smoke.mjs` for the new append-based behavior (14/14 assertions).
+  `cargo test --lib` 30/30. `pnpm check` / `pnpm build` clean.
+- **Needs an app rebuild** (`cargo tauri build`) to ship — this touches Rust (`SessionMeta`), so a
+  plain frontend redeploy isn't enough.
+
+## Phase 6 — Chat viewer & Browse polish (planned, not started)
+
+Ideas raised by the founder while using the app day-to-day (2026-07-04). None of these are
+implemented yet — recorded here so they aren't lost.
+
+1. **Back-to-top button in the chat viewer.** `SessionEditor.svelte` has no way to jump back to the
+   top of a long session without manually scrolling — add a floating button that appears once
+   scrolled past some threshold.
+2. **Always-floating top nav bar in the chat view.** The app header (`+page.svelte`'s
+   `.app-header`) should stay pinned at the top of the viewport while scrolling through a session,
+   not scroll away with the page. Check current `app.css` for whether it's already
+   `position: sticky`/`fixed` and fix if not.
+3. **Replace Browse's search box with the global Search engine.** `BrowseView.svelte`'s search
+   today is a plain substring match on title/project with a separate sort dropdown
+   (newest/oldest/title) as the only other control. Founder's call: retire that separate box and
+   point Browse's search at the same engine/filters `SearchView.svelte` already has (case/whole-word/
+   regex toggles, source filters, date range), scoped to session titles/metadata rather than full
+   message content — not two disconnected search boxes. Needs a design pass on how the two views
+   relate (does Browse embed a mode of SearchView, or share the same store?).
+4. **Search within a single open chat.** Closes the known gap from Phase 4 / `docs/search-design.md`:
+   `SearchView`'s "This session only" filter and `sessionOnly`/`currentSessionPath` plumbing already
+   work and are tested, but there's no live entry point from inside an open session — only
+   Browse → Search reaches the view today, and by then `current` is cleared. Add a "search this
+   chat" entry point from `SessionEditor.svelte`/the viewer header that opens Search pre-scoped to
+   the open session.
+5. **Show the chat's title inside the chat viewer itself, with inline rename.** Today the title only
+   shows in the Browse list (`BrowseView.svelte`'s per-card rename); the open viewer
+   (`SessionEditor.svelte`, `+page.svelte` header) shows project + turn count but not the title. Add
+   the title to the viewer (header or `SessionMetaCard.svelte`) and let it be renamed from there
+   too — useful for finding/resuming a session by name without going back to Browse.
+6. **"Resume" action in the Browse list, not just the open viewer.** `+page.svelte`'s header
+   "Resume" button only exists once a session is open; add the same action (copy the
+   `claude --resume` command / open in terminal) to each session card in `BrowseView.svelte`,
+   alongside the existing per-card Rename.
+
 ## Verification performed
 
 - `cargo test --lib` (src-tauri): 30/30 passing.
@@ -126,8 +197,6 @@ Closes out the two items `docs/search-design.md` left "NOT STARTED":
 ## Open follow-ups (not done here)
 
 - New app icon/logo art for "Deck" (needs founder-supplied art).
-- A "search within this session" entry point from the session viewer, to actually surface the
-  current-session-only filter built in Phase 4.
 - Guided onboarding / install-Claude-Code flow, for reaching truly non-technical users who don't
   yet have Claude Code installed.
 - Heavier JSON-Schema validation (`ajv` or similar) for the settings form, if silent type coercion

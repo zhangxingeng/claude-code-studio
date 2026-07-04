@@ -35,6 +35,9 @@ pub struct SessionMeta {
     pub first_ts: String,        // first timestamp value seen ("" if none)
     pub last_ts: String,         // last timestamp value seen ("" if none)
     pub cwd: String,             // first-seen "cwd" value ("" if none) — the real project path
+    pub custom_title: String,    // last-seen "customTitle" value ("" if none) — a real Claude Code
+                                  // rename (ours or the CLI's own /rename), wherever it occurs in
+                                  // the file. Last-wins so a later rename supersedes an earlier one.
 }
 
 #[derive(Serialize)]
@@ -247,6 +250,7 @@ fn list_sessions() -> Result<Vec<SessionMeta>, String> {
             let mut first_ts: String = String::new();
             let mut last_ts: String = String::new();
             let mut cwd: String = String::new();
+            let mut custom_title: String = String::new();
 
             for line in content.lines() {
                 if line.is_empty() {
@@ -284,6 +288,16 @@ fn list_sessions() -> Result<Vec<SessionMeta>, String> {
                         if !c.is_empty() {
                             cwd = c;
                         }
+                    }
+                }
+
+                // Renames can land anywhere in the file (Claude Code's own /rename
+                // appends near wherever the conversation currently is), so this must
+                // scan the whole file, not just the 50-line preview — and last-wins,
+                // since a later rename supersedes an earlier one.
+                if let Some(ct) = json_str_after(line, "\"customTitle\":\"") {
+                    if !ct.is_empty() {
+                        custom_title = ct;
                     }
                 }
             }
@@ -331,6 +345,7 @@ fn list_sessions() -> Result<Vec<SessionMeta>, String> {
                 first_ts,
                 last_ts,
                 cwd,
+                custom_title,
             });
         }
     }

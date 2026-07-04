@@ -246,10 +246,13 @@ export function parseJsonl(text: string): Entry[] {
 
 /**
  * Extract session metadata (title, date, model) from either raw JSONL preview
- * lines (string[]) or already-parsed Entry[].
+ * lines (string[]) or already-parsed Entry[]).
  *
- * The browse list passes SessionMeta.preview (raw lines) so this must handle
- * ai-title entries even though parseJsonl filters them.
+ * This only ever sees the first ~50 lines (SessionMeta.preview), so it can't
+ * see a rename that landed further into the file — BrowseView.svelte prefers
+ * SessionMeta.custom_title (scanned server-side across the whole file) over
+ * this function's title whenever one is set; this is just the pre-rename
+ * fallback (first real user message).
  */
 export function extractMeta(
   preview: string[] | Entry[]
@@ -261,7 +264,6 @@ export function extractMeta(
   if (preview.length === 0) return { title: 'Untitled', date, model };
 
   if (typeof preview[0] === 'string') {
-    // Raw JSONL lines — parse without meta-type filtering to capture ai-title
     for (const line of preview as string[]) {
       const trimmed = line.trim();
       if (!trimmed) continue;
@@ -272,9 +274,6 @@ export function extractMeta(
       const message = (raw['message'] as Record<string, unknown>) || {};
       const content = message['content'];
 
-      if (type === 'ai-title' && !title) {
-        title = typeof content === 'string' ? content : '';
-      }
       if (type === 'user' && !date) {
         date = (raw['timestamp'] as string) || '';
         if (!title) {

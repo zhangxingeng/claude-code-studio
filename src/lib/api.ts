@@ -73,6 +73,7 @@ export async function listSessions(): Promise<SessionMeta[]> {
         first_ts: '2025-06-01T10:00:00.000Z',
         last_ts: '2025-06-01T10:05:00.000Z',
         cwd: '/dev/mock/demo-project',
+        custom_title: '',
       },
     ];
   }

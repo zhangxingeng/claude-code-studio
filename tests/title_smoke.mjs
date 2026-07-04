@@ -26,100 +26,56 @@ function assert(cond, msg) {
 }
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
-const aiTitleLine = JSON.stringify({ type: 'ai-title', message: { content: 'Old Title' } });
-const userLine    = JSON.stringify({ type: 'user', uuid: 'abc', message: { content: 'hello' } });
-const secondAiLine = JSON.stringify({ type: 'ai-title', message: { content: 'Second' } });
+const userLine = JSON.stringify({ type: 'user', uuid: 'abc', message: { content: 'hello' } });
+const SID = 'a601b511-56ce-4b92-a3f0-7092553de44d';
 
-// ── Test 1: updates existing ai-title in place ────────────────────────────────
-console.log('\n[applyTitleToJsonl — update existing]');
-{
-  const input = `${aiTitleLine}\n${userLine}\n`;
-  const result = applyTitleToJsonl(input, 'New Title');
-  const lines = result.split('\n').filter((l) => l.trim());
-
-  assert(lines.length === 2, 'line count unchanged (2)');
-
-  const p0 = JSON.parse(lines[0]);
-  assert(p0.type === 'ai-title', 'first line is still ai-title');
-  assert(p0.message.content === 'New Title', 'ai-title content updated to "New Title"');
-
-  assert(lines[1] === userLine, 'user line is byte-identical to input');
-}
-
-// ── Test 2: inserts ai-title at top when absent ───────────────────────────────
-console.log('\n[applyTitleToJsonl — insert when absent]');
+// ── Test 1: appends custom-title + agent-name, leaves existing content untouched ──
+console.log('\n[applyTitleToJsonl — appends real rename entries]');
 {
   const input = `${userLine}\n`;
-  const result = applyTitleToJsonl(input, 'Inserted Title');
+  const result = applyTitleToJsonl(input, 'New Title', SID);
   const lines = result.split('\n').filter((l) => l.trim());
 
-  assert(lines.length === 2, 'one extra line inserted (now 2)');
+  assert(lines.length === 3, 'one line grew to three (user + custom-title + agent-name)');
+  assert(lines[0] === userLine, 'original user line is byte-identical');
 
-  const p0 = JSON.parse(lines[0]);
-  assert(p0.type === 'ai-title', 'inserted line is ai-title');
-  assert(p0.message.content === 'Inserted Title', 'inserted ai-title content correct');
+  const p1 = JSON.parse(lines[1]);
+  assert(p1.type === 'custom-title', 'second line is custom-title');
+  assert(p1.customTitle === 'New Title', 'customTitle is the new title');
+  assert(p1.sessionId === SID, 'sessionId is threaded through');
 
-  assert(lines[1] === userLine, 'original user line byte-identical');
+  const p2 = JSON.parse(lines[2]);
+  assert(p2.type === 'agent-name', 'third line is agent-name');
+  assert(p2.agentName === 'New Title', 'agentName is the new title');
+  assert(p2.sessionId === SID, 'sessionId is threaded through');
 }
 
-// ── Test 3: only FIRST ai-title is updated; second is left byte-identical ─────
-console.log('\n[applyTitleToJsonl — only first ai-title updated]');
+// ── Test 2: renaming twice appends again (last-wins on read, not edited in place) ──
+console.log('\n[applyTitleToJsonl — repeated rename appends again]');
 {
-  const input = `${aiTitleLine}\n${userLine}\n${secondAiLine}\n`;
-  const result = applyTitleToJsonl(input, 'Updated');
-  const lines = result.split('\n').filter((l) => l.trim());
+  const once = applyTitleToJsonl(`${userLine}\n`, 'First', SID);
+  const twice = applyTitleToJsonl(once, 'Second', SID);
+  const lines = twice.split('\n').filter((l) => l.trim());
 
-  assert(lines.length === 3, 'line count unchanged (3)');
-
-  const p0 = JSON.parse(lines[0]);
-  assert(p0.message.content === 'Updated', 'first ai-title updated to "Updated"');
-
-  assert(lines[1] === userLine, 'middle user line byte-identical');
-
-  assert(lines[2] === secondAiLine, 'second ai-title line byte-identical (untouched)');
+  assert(lines.length === 5, 'user + 2x(custom-title, agent-name) = 5 lines');
+  assert(JSON.parse(lines[1]).customTitle === 'First', 'first rename entry untouched');
+  assert(JSON.parse(lines[3]).customTitle === 'Second', 'second rename appended after it');
 }
 
-// ── Test 4: output ends with a trailing newline ───────────────────────────────
+// ── Test 3: output ends with a trailing newline ───────────────────────────────
 console.log('\n[applyTitleToJsonl — trailing newline]');
 {
-  const input = `${userLine}\n`;
-  const result = applyTitleToJsonl(input, 'Title');
+  const result = applyTitleToJsonl(`${userLine}\n`, 'Title', SID);
   assert(result.endsWith('\n'), 'output ends with trailing newline');
 }
 
-// ── Test 5: changed line is valid JSON with correct structure ─────────────────
-console.log('\n[applyTitleToJsonl — valid JSON on changed line]');
+// ── Test 4: works even if input is missing its trailing newline ───────────────
+console.log('\n[applyTitleToJsonl — tolerates missing trailing newline on input]');
 {
-  const input = `${aiTitleLine}\n`;
-  const result = applyTitleToJsonl(input, 'Valid JSON Check');
+  const result = applyTitleToJsonl(userLine, 'Title', SID);
   const lines = result.split('\n').filter((l) => l.trim());
-  let ok = false;
-  try {
-    const p = JSON.parse(lines[0]);
-    ok = p.type === 'ai-title' && typeof p.message?.content === 'string';
-  } catch {
-    ok = false;
-  }
-  assert(ok, 'changed line is valid JSON with type+message.content');
-}
-
-// ── Test 6: blank and non-JSON lines pass through unchanged ──────────────────
-console.log('\n[applyTitleToJsonl — blank/non-JSON lines pass through]');
-{
-  const blankLine = '';
-  const garbageLine = 'not-json-at-all';
-  const input = `${blankLine}\n${garbageLine}\n${userLine}\n`;
-  const result = applyTitleToJsonl(input, 'Any Title');
-  const lines = result.split('\n');
-  // Remove the final empty string from the trailing newline
-  if (lines[lines.length - 1] === '') lines.pop();
-
-  // A new ai-title was inserted at top (no existing one found)
-  // so output is: [ai-title, blank, garbage, user]
-  assert(lines.length === 4, 'blank + garbage + user + new ai-title = 4 lines');
-  assert(lines[1] === blankLine, 'blank line preserved');
-  assert(lines[2] === garbageLine, 'garbage line preserved');
-  assert(lines[3] === userLine, 'user line preserved');
+  assert(lines.length === 3, 'still appends cleanly without a dangling newline');
+  assert(lines[0] === userLine, 'original content preserved');
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

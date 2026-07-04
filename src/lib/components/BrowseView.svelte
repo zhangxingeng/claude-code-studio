@@ -72,7 +72,10 @@
       const m = extractMeta(s.preview);
       return {
         meta: s,
-        title: renamedTitles[s.id] ?? cleanTitle(m.title),
+        // A rename can land anywhere in the file, not just the 50-line preview
+        // extractMeta() sees — s.custom_title is scanned server-side across the
+        // whole file, so it's the source of truth once a rename exists.
+        title: renamedTitles[s.id] ?? (s.custom_title || cleanTitle(m.title)),
         date: m.date,
         model: m.model,
         project: projectLabel(s.cwd, s.project_raw, homeDir),

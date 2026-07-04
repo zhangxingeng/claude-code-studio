@@ -75,6 +75,8 @@ export interface SessionMeta {
   first_ts: string;         // first timestamp value seen ("" if none)
   last_ts: string;          // last timestamp value seen ("" if none)
   cwd: string;              // first-seen "cwd" value ("" if none) — the real project path
+  custom_title: string;     // last-seen "customTitle" value ("" if none), scanned across the
+                            // whole file — a real Claude Code rename, wherever it occurs
 }
 
 // ---------------------------------------------------------------------------

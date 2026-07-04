@@ -63,7 +63,7 @@ and richer filtering. Status of each:
    - Explicitly **out of scope**: model/git-branch filtering (needs new columns + reindex).
    - **Known gap**: today's navigation only reaches Search from Browse, so `currentSessionPath` is
      never actually populated yet in practice — the filter is correct and unit-tested, but no UI
-     entry point passes a real session path in. See `docs/roadmap.md` §"Open follow-ups".
+     entry point passes a real session path in. See `docs/roadmap.md` §Phase 6, item 4.
 
 See `docs/roadmap.md` for what came after Search Phase 2 — the wider Deck rebrand, settings editor,
 and terminal launcher.
