@@ -167,3 +167,13 @@ none of these are committed work — each needs its own design pass before becom
   functional changes beyond the version bump itself. README rebrand (marketing pass, non-technical
   section on top / technical below) and repo contribution setup (`CONTRIBUTING.md`, issue/PR
   templates) landed alongside it — see below.
+- **CI/CD hardening (post-v0.6.0 tag).** The v0.6.0 release run flagged Node 20 deprecation
+  warnings — `actions/checkout@v4`, `actions/setup-node@v4`, and `pnpm/action-setup@v4` were being
+  silently forced onto Node 24 by GitHub. Bumped all three (`@v7`/`@v6`/`@v6`) plus
+  `tauri-apps/tauri-action@v0` → `@v1` (checked the v1 changelog — none of its breaking changes
+  touch the inputs this repo uses). Added `.github/workflows/ci.yml`: a real CI check
+  (`pnpm check` + `pnpm build` + `cargo test --lib`) on every push/PR to `main` — previously the
+  only workflow was the release build itself, so a broken PR could only be caught by a human.
+  Added `.github/dependabot.yml` covering the three dependency surfaces (pnpm/npm, Cargo, and the
+  GitHub Actions versions in our own workflows), weekly, grouped by minor/patch to keep the PR
+  volume sane.
