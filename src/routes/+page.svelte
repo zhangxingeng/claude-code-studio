@@ -7,7 +7,7 @@
    */
   import { onMount, tick } from 'svelte';
   import { getVersion } from '@tauri-apps/api/app';
-  import { checkForUpdates } from '$lib/updater.svelte';
+  import { checkForUpdates, update as updateState } from '$lib/updater.svelte';
   import type { Session, SessionMeta, SearchHit } from '$lib/types';
   import { readSession, readSubagents, openSessionFile, resumeInTerminal } from '$lib/api';
   import { parseJsonl, decodeProject } from '$lib/parser';
@@ -312,7 +312,12 @@ ${contentHtml}
   <a href="https://github.com/zhangxingeng/deck" target="_blank" rel="noopener noreferrer">
     Deck{appVersion ? ` v${appVersion}` : ''} — offline, open-source control center for Claude Code
   </a>
-  <button class="app-footer__check" onclick={handleCheckForUpdates} type="button">
+  <button
+    class="app-footer__check"
+    onclick={handleCheckForUpdates}
+    disabled={updateState.status === 'checking' || updateState.status === 'downloading'}
+    type="button"
+  >
     Check for updates
   </button>
 </footer>

@@ -107,6 +107,7 @@ a { color: var(--accent-user); }
   text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
 }
 .app-footer__check:hover { color: var(--text-muted); }
+.app-footer__check:disabled { cursor: default; opacity: 0.5; text-decoration: none; }
 
 /* Buttons */
 .btn {

@@ -39,6 +39,11 @@ let pending: Update | null = null;
  *   surface "checking", "you're up to date", and errors.
  */
 export async function checkForUpdates(silent = true): Promise<void> {
+  // Never let a check stomp an in-flight download or overlap another check —
+  // without this, clicking "Check for updates" mid-download resets the UI
+  // back to "available" while the original download keeps running, and a
+  // second "Update & restart" click races a second downloadAndInstall().
+  if (update.status === 'downloading' || update.status === 'checking') return;
   if (!silent) {
     update.status = 'checking';
     update.error = '';
@@ -67,7 +72,11 @@ export async function checkForUpdates(silent = true): Promise<void> {
 
 /** Download the pending update with progress, then relaunch into the new build. */
 export async function installUpdate(): Promise<void> {
-  if (!pending) return;
+  // Reentrancy guard: without it, two triggers (e.g. a stale banner click
+  // after checkForUpdates() re-ran) start two concurrent
+  // downloadAndInstall() calls, each prompting its own install/permission
+  // dialog and racing writes to the shared `update.progress`.
+  if (!pending || update.status === 'downloading') return;
   update.status = 'downloading';
   update.progress = 0;
   update.error = '';
