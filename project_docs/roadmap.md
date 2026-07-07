@@ -336,6 +336,46 @@ Independently re-run by me after each phase (not just trusting each build agent'
 `browse`/`session-viewer`/`inline-search`, the 2 removed were dead since Phase A). Confirmed via grep
 that the dead subsystem left zero references and `subagent_count` was not over-deleted.
 
+## Phase 10 — Fuzzy/intent search engine: tantivy replaces regex/SQLite matcher (DONE, 2026-07-07)
+
+Closes **#5**. Full design rationale lives in `project_docs/search-design.md`'s "v2 — Fuzzy/intent
+search redesign" section — this entry is the build record, not a design restatement.
+
+- **Backend (`40b0d38`)** — replaced the `regex`-crate substring/whole-word/regex scan and the
+  `blocks` SQLite table with an embedded tantivy index: BM25 ranking, a boosted exact+fuzzy union
+  query per token (exact/near-exact still ranks above loosely-fuzzy), and an `ENGINE_VERSION` marker
+  forcing one full rebuild for existing users' stale v1 cache so nobody upgrades into an empty index.
+- **Frontend (`deccec6`)** — removed the case/whole-word/regex toggle UI entirely (no geek-mode gate)
+  from `BrowseView.svelte` and `InlineSearchPanel.svelte`; `SearchOpts` deleted from `types.ts`;
+  `SearchHit` gained a `score` field for the engine's relevance ranking.
+- **Gate-2 audit + fixes (`66c1fc0`)** — three independent audits (contract consistency, migration
+  data-safety, relevance correctness) ran before calling the feature done, and found real bugs a
+  green test suite hadn't caught: a **CRITICAL** (tantivy's default tokenizer silently dropped any
+  token 40+ chars at index time — a git SHA or long hash, routine in this app's domain, was
+  unsearchable with zero error), two **HIGH** (the cold-tier fallback required every query token
+  present while the warm tier is OR-across-tokens by design — same query, a stricter result set
+  purely from index staleness; unscaled `FUZZY_DISTANCE=1` flooded short/common-token queries with
+  near-random noise), and several MEDIUM/LOW items (fuzzy-only hits had no highlighted snippet
+  range; the "indexing N/M…" indicator never appeared during the first-launch build; `ENGINE_VERSION`
+  wasn't tied to the schema actually changing shape; stale comments). All fixed with regression tests
+  in the same pass.
+
+### Verification (Phase 10)
+
+`cargo test --lib`: 36/36 passing (33 pre-audit, +3 regression tests for the audit findings).
+`pnpm check`: 0 errors/warnings. `pnpm test:smoke`: 98/98 assertions. `pnpm build`: clean production
+build. Three independent audit passes (contract/migration/relevance, each reading the system fresh
+without being told what changed) ran between the feature commits and the fix commit; findings
+triaged as a union and fixed together, then re-verified green before commit.
+
+### Follow-up filed, not fixed here
+
+**Issue #12** — a narrower, self-healing cross-process race in the engine-version migration path
+(only triggers if two app instances launch simultaneously right after an upgrade, and the corrupted
+intermediate state self-heals on the next sweep/restart — not permanent data loss). The real fix
+(single-instance enforcement via `tauri-plugin-single-instance`, or a cross-process file lock) is an
+app-wide decision beyond search's own scope, so it's tracked separately rather than bundled in.
+
 ## Verification performed
 
 - `cargo test --lib` (src-tauri): 30/30 passing.
