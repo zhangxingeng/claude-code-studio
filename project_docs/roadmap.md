@@ -99,10 +99,9 @@ Closes out the two items `project_docs/search-design.md` left "NOT STARTED":
   file-skip in the cold-path directory loop (`state.rs`). Wired through `search.svelte.ts`
   (`sessionOnly` toggle + `currentSessionPath`, set via `initSearch(currentSessionPath)`) and a
   "This session only" checkbox in `SearchView.svelte`, shown when a `currentSessionPath` prop is
-  passed. **Known gap**: today's navigation only reaches Search from Browse (`current` session is
-  always cleared by then), so this checkbox has no live entry point yet — the filter itself is
-  correct and tested, but wiring a "search within this session" button from the viewer is a
-  follow-up, not done here.
+  passed. **Gap closed in Phase 6**: `InlineSearchPanel.svelte` now calls `initSearch(sessionPath)`
+  and sets `sessionOnly = true`, mounted from `SessionEditor.svelte` (in-chat search / Ctrl+F) —
+  the "search within this session" filter has a live entry point.
 - Model/git-branch filtering remains explicitly out of scope (needs new indexed columns + a
   reindex, not requested).
 - 4 new Rust tests (tool-name match, tool-name overrides sources, session-path restriction) on top

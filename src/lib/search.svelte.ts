@@ -170,13 +170,6 @@ export function setToolName(name: string): void {
   scheduleSearch();
 }
 
-/** Toggle "this session only" (a no-op if the search wasn't opened from a session). */
-export function toggleSessionOnly(): void {
-  search.sessionOnly = !search.sessionOnly;
-  search.limit = search.pageSize;
-  scheduleSearch();
-}
-
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
 /** Load the project list, kick a sweep, and start polling index status.
