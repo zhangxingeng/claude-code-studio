@@ -291,6 +291,51 @@ campaign). `cargo check` clean. `pnpm check`: 0 errors/warnings. `pnpm exec play
 (re-running the tests myself, not just trusting each build agent's own report) before being counted
 done.
 
+## Phase 9 — Chat viewer trim: lean read + plain-edit, no version control (DONE, 2026-07-06)
+
+Closes **#6**. Built directly (founder: "we dont want complex feature... removing is the right call"),
+across 3 sequential subagent dispatches (sequential, not parallel, because the phases share hot files —
+`displayModel.ts`, `MessageCell.svelte`, `SessionEditor.svelte` — so concurrent writers would've hit the
+pre-commit-stash trap). Each phase independently re-verified by me before the next was dispatched.
+
+- **Phase A (`5b341bd`)** — removed `thinking` and `tool_use`/`tool_result` rendering entirely: deleted
+  `ToolGroup.svelte`, the corresponding `Block.svelte` branches (including the subagent "Open →"
+  affordance — intentionally dropped, not carved out, since there's no tool-call block left to click
+  through from), the `DisplayToolGroup` half of `displayModel.ts`, and the matching parse/build/type
+  surface (`parser.ts`/`builder.ts`/`types.ts`). Display model is now user/assistant text only.
+- **Phase B (`313d52c`)** — replaced the per-row version-stack edit model (`editDraft.ts`'s
+  `versions[]`/`active`, `diff.ts`, `DiffView.svelte`, the `MessageCell.svelte` diff/history toolbar,
+  the crash-safe draft autosave loop and Rust `read_edit_draft`/`write_edit_draft`/`delete_edit_draft`/
+  `edit_draft_path`) with plain edit-in-place → save. **The single-slot backup mechanism
+  (`snapshot`/`list_backups`/`restore_backup`/`BackupVersion`) was explicitly kept, untouched** — that's
+  the Phase 8 backup-simplification decision, not part of this teardown. Added a minimal one-button
+  "restore backup" affordance (no version picker — there's only ever one file) resolving the open call
+  issue #6 had flagged.
+- **Phase C (`c6b9bed`)** — confirmed nav demotion needed no changes (`browse` was already the default
+  view, viewer already reached only via `openSession`, no hero styling favored it) — then found and
+  removed an entire dead subsystem Phase A's "Open →" removal had orphaned but not cleaned up: the
+  subagent-transcript drilldown (`readSubagents`/`linkSubagents`/`buildSubagentSessions`/`SubagentFile`
+  type/Rust `read_subagents` command, its mock fixtures, and two now-fully-dead e2e specs —
+  `subagent-stack.spec.ts`, `tool-input-popover.spec.ts`). Left `subagent_count` (the BrowseView "N
+  subagents" badge) untouched — separate, still-used metadata, not part of the drilldown feature.
+
+### Standing preference this prompted (recorded in `.claude/memory/MEMORY.md` and
+`ai-first-docs/craft/team/user_preferences_reference.mdx`)
+
+Cut features people don't actually use, even ones that took real effort to build — a smaller surface
+that's all genuinely used beats a larger one padded with idle machinery. This issue is the worked
+example: editing a chat message was already rare, and editing tool-call/thinking content was
+structurally impossible, so the fine-grained version-control/diff/draft machinery around chat edits had
+no usage to justify its maintenance cost.
+
+### Verification (Phase 9)
+
+Independently re-run by me after each phase (not just trusting each build agent's report): `pnpm check`
+0 errors across all 3 phases; `cargo check` clean; `cargo test --lib` 39/39 throughout; `pnpm test:smoke`
+98/98 assertions after the final phase; `pnpm test:e2e` 4/4 (down from 7 — the 3 remaining specs are
+`browse`/`session-viewer`/`inline-search`, the 2 removed were dead since Phase A). Confirmed via grep
+that the dead subsystem left zero references and `subagent_count` was not over-deleted.
+
 ## Verification performed
 
 - `cargo test --lib` (src-tauri): 30/30 passing.
