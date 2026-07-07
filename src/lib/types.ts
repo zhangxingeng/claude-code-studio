@@ -69,13 +69,6 @@ export interface SessionMeta {
 // Search (mirrors the Rust search module's camelCase-serialized structs)
 // ---------------------------------------------------------------------------
 
-/** VS Code-style search toggles. */
-export interface SearchOpts {
-  caseSensitive: boolean;
-  wholeWord: boolean;
-  regex: boolean;
-}
-
 /** Query-time filters. Empty sources/projects mean "no restriction". */
 export interface SearchFilters {
   sources: string[];             // low-level: user|assistant|thinking|tool_use|tool_result
@@ -97,6 +90,7 @@ export interface SearchHit {
   source: string;
   snippet: string;
   matchRanges: [number, number][];
+  score: number;
 }
 
 /** Returned when a search finishes (or is superseded / truncated by limit). */

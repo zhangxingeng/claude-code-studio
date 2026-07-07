@@ -6,7 +6,6 @@
 import type {
   SessionMeta,
   BackupVersion,
-  SearchOpts,
   SearchFilters,
   SearchHit,
   SearchSummary,
@@ -258,20 +257,18 @@ export async function resumeInTerminal(cwd: string, sessionId: string): Promise<
  */
 export async function searchSessions(
   query: string,
-  opts: SearchOpts,
   filters: SearchFilters,
   searchId: number,
   limit: number,
   onHit: (hit: SearchHit) => void
 ): Promise<SearchSummary> {
-  if (!isTauri()) return devSearch(query, opts, filters, limit, onHit);
+  if (!isTauri()) return devSearch(query, filters, limit, onHit);
 
   const { invoke, Channel } = await import('@tauri-apps/api/core');
   const channel = new Channel<SearchHit>();
   channel.onmessage = onHit;
   return invoke<SearchSummary>('search', {
     query,
-    opts,
     filters,
     searchId,
     limit,
@@ -292,12 +289,14 @@ export async function indexStatus(): Promise<IndexStatus | null> {
 }
 
 // --- Browser-dev fallback: a minimal in-JS scan over the mock session. -------
+// Plain case-insensitive substring match — a stand-in for the real fuzzy/intent
+// engine (issue #5), not a faithful reimplementation of it. Good enough to
+// exercise the UI in `pnpm dev` / Playwright without the native backend.
 
-function buildDevRegex(query: string, opts: SearchOpts): RegExp | null {
-  let pattern = opts.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (opts.wholeWord) pattern = `\\b${pattern}\\b`;
+function buildDevMatcher(query: string): RegExp | null {
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   try {
-    return new RegExp(pattern, opts.caseSensitive ? 'g' : 'gi');
+    return new RegExp(escaped, 'gi');
   } catch {
     return null;
   }
@@ -305,14 +304,13 @@ function buildDevRegex(query: string, opts: SearchOpts): RegExp | null {
 
 async function devSearch(
   query: string,
-  opts: SearchOpts,
   filters: SearchFilters,
   limit: number,
   onHit: (hit: SearchHit) => void
 ): Promise<SearchSummary> {
   const summary: SearchSummary = { hits: 0, scanned: 0, cancelled: false, truncated: false };
   if (!query) return summary;
-  const re = buildDevRegex(query, opts);
+  const re = buildDevMatcher(query);
   if (!re) return summary;
 
   const { parseJsonl } = await import('./parser');
@@ -353,6 +351,7 @@ async function devSearch(
         source,
         snippet: text.slice(0, 240),
         matchRanges: ranges.filter(([s]) => s < 240) as [number, number][],
+        score: ranges.length,
       });
       summary.hits++;
       if (summary.hits >= limit) {

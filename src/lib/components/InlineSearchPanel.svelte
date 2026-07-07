@@ -2,15 +2,16 @@
   /**
    * InlineSearchPanel.svelte — "find in this chat", reusing the same search
    * engine/store as the home page's merged Browse+Search, scoped to one
-   * session. Trimmed filter set (query + case/whole-word/regex + tool name —
-   * no source chips, date range, or project filter, since those don't apply
-   * to a single already-open chat). Results are a flat list (no project/chat
-   * grouping needed — every hit is already in this session); clicking one
-   * scrolls to that message via the caller's jumpTo.
+   * session. Trimmed filter set (query + tool name — no source chips, date
+   * range, or project filter, since those don't apply to a single
+   * already-open chat; no case/whole-word/regex mode, see issue #5). Results
+   * are a flat list (no project/chat grouping needed — every hit is already
+   * in this session); clicking one scrolls to that message via the caller's
+   * jumpTo.
    */
   import { onMount, onDestroy, tick } from 'svelte';
   import type { SearchHit } from '$lib/types';
-  import { search, setQuery, toggleOpt, setToolName, initSearch, disposeSearch } from '$lib/search.svelte';
+  import { search, setQuery, setToolName, initSearch, disposeSearch } from '$lib/search.svelte';
 
   let {
     sessionPath,
@@ -115,20 +116,6 @@
         spellcheck="false"
         autocomplete="off"
       />
-      <div class="ics__toggles">
-        <button
-          class="tg" class:on={search.opts.caseSensitive}
-          title="Match case" aria-pressed={search.opts.caseSensitive}
-          onclick={() => toggleOpt('caseSensitive')} type="button">Aa</button>
-        <button
-          class="tg" class:on={search.opts.wholeWord}
-          title="Whole word" aria-pressed={search.opts.wholeWord}
-          onclick={() => toggleOpt('wholeWord')} type="button">&#8203;<span class="ab">ab</span></button>
-        <button
-          class="tg mono" class:on={search.opts.regex}
-          title="Use regular expression" aria-pressed={search.opts.regex}
-          onclick={() => toggleOpt('regex')} type="button">.*</button>
-      </div>
     </div>
     <input
       type="text"
@@ -188,23 +175,11 @@
   .ics__bar { display: flex; align-items: center; gap: 0.5rem; }
   .ics__input { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; }
   .ics__input input[type='text'] {
-    width: 100%; font-size: 0.88rem; padding: 0.45rem 5.5rem 0.45rem 0.65rem;
+    width: 100%; font-size: 0.88rem; padding: 0.45rem 0.65rem;
     background: var(--bg-card); color: var(--text);
     border: 1px solid var(--border-strong); border-radius: 0.4rem; outline: none;
   }
   .ics__input input[type='text']:focus { border-color: var(--accent-user); }
-
-  .ics__toggles { position: absolute; right: 0.3rem; display: flex; gap: 0.15rem; }
-  .tg {
-    min-width: 1.55rem; height: 1.55rem; padding: 0 0.3rem;
-    font-size: 0.75rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
-    background: transparent; color: var(--text-muted);
-    border: 1px solid transparent; border-radius: 0.3rem; cursor: pointer;
-  }
-  .tg:hover { background: var(--bg-subtle); color: var(--text); }
-  .tg.on { background: color-mix(in srgb, var(--accent-user) 22%, transparent); color: var(--text); border-color: color-mix(in srgb, var(--accent-user) 45%, transparent); }
-  .tg.mono { font-family: var(--font-mono, monospace); }
-  .tg .ab { text-decoration: underline; }
 
   .ics__tool-input {
     flex: 0 0 auto; width: 8rem; font-size: 0.78rem; padding: 0.4rem 0.55rem;

@@ -1,11 +1,10 @@
 /**
- * Reactive search store (Svelte 5 runes). Owns the query, toggles, filters, and
- * the streamed `hits` array. Each query bumps a monotonic `searchId`; hits from
+ * Reactive search store (Svelte 5 runes). Owns the query, filters, and the
+ * streamed `hits` array. Each query bumps a monotonic `searchId`; hits from
  * a superseded search are ignored, so results only ever append (no flicker).
  */
 import type {
   SearchHit,
-  SearchOpts,
   SearchFilters,
   SearchSummary,
   IndexStatus,
@@ -26,7 +25,6 @@ export interface ProjectOption {
 
 export const search = $state({
   query: '',
-  opts: { caseSensitive: false, wholeWord: false, regex: false } as SearchOpts,
   sources: ['user', 'assistant'] as string[], // "Messages" on by default
   from: null as number | null,
   to: null as number | null,
@@ -87,11 +85,10 @@ export async function runSearch(): Promise<void> {
   }
   search.running = true;
 
-  const opts = { ...search.opts };
   const filters = currentFilters();
 
   try {
-    const summary = await searchSessions(search.query, opts, filters, id, search.limit, (hit) => {
+    const summary = await searchSessions(search.query, filters, id, search.limit, (hit) => {
       if (id !== searchId) return; // superseded by a newer search
       const key = `${hit.sessionPath}:${hit.lineNo}:${hit.blockNo}`;
       if (seen.has(key)) return; // warm + cold tiers can overlap briefly
@@ -123,12 +120,6 @@ export function setQuery(q: string): void {
 /** Bump the limit and re-run the search to load another page of results. */
 export function loadMore(): void {
   search.limit += search.pageSize;
-  scheduleSearch();
-}
-
-export function toggleOpt(k: keyof SearchOpts): void {
-  search.opts[k] = !search.opts[k];
-  search.limit = search.pageSize;
   scheduleSearch();
 }
 

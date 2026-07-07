@@ -9,7 +9,8 @@
    * (title instead of the raw jsonl filename), reusing the exact same search
    * engine/store `SearchView.svelte` used to own alone. There is no more a
    * separate "basic" search box or a separate Search page — this is the one
-   * search surface, always visible, always advanced.
+   * search surface, always visible, fuzzy/intent-matched by default (no
+   * case/whole-word/regex mode — see issue #5).
    */
   import { onMount, onDestroy, tick } from 'svelte';
   import type { SessionMeta, SearchHit } from '$lib/types';
@@ -21,7 +22,6 @@
   import {
     search,
     setQuery,
-    toggleOpt,
     toggleSource,
     toggleProject,
     clearProjects,
@@ -493,20 +493,6 @@
       spellcheck="false"
       autocomplete="off"
     />
-    <div class="toggles">
-      <button
-        class="tg" class:on={search.opts.caseSensitive}
-        title="Match case" aria-pressed={search.opts.caseSensitive}
-        onclick={() => toggleOpt('caseSensitive')} type="button">Aa</button>
-      <button
-        class="tg" class:on={search.opts.wholeWord}
-        title="Whole word" aria-pressed={search.opts.wholeWord}
-        onclick={() => toggleOpt('wholeWord')} type="button">&#8203;<span class="ab">ab</span></button>
-      <button
-        class="tg mono" class:on={search.opts.regex}
-        title="Use regular expression" aria-pressed={search.opts.regex}
-        onclick={() => toggleOpt('regex')} type="button">.*</button>
-    </div>
   </div>
 
   <!-- ── Filters ─────────────────────────────────────────────────────────── -->
@@ -794,23 +780,11 @@
   }
   .search-input { position: relative; display: flex; align-items: center; }
   .search-input input[type='text'] {
-    flex: 1; font-size: 0.95rem; padding: 0.55rem 6.5rem 0.55rem 0.75rem;
+    flex: 1; font-size: 0.95rem; padding: 0.55rem 0.75rem;
     background: var(--bg-card); color: var(--text);
     border: 1px solid var(--border-strong); border-radius: 0.45rem; outline: none;
   }
   .search-input input[type='text']:focus { border-color: var(--accent-user); }
-
-  .toggles { position: absolute; right: 0.35rem; display: flex; gap: 0.15rem; }
-  .tg {
-    min-width: 1.7rem; height: 1.7rem; padding: 0 0.35rem;
-    font-size: 0.8rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
-    background: transparent; color: var(--text-muted);
-    border: 1px solid transparent; border-radius: 0.3rem; cursor: pointer;
-  }
-  .tg:hover { background: var(--bg-subtle); color: var(--text); }
-  .tg.on { background: color-mix(in srgb, var(--accent-user) 22%, transparent); color: var(--text); border-color: color-mix(in srgb, var(--accent-user) 45%, transparent); }
-  .tg.mono { font-family: var(--font-mono, monospace); }
-  .tg .ab { text-decoration: underline; }
 
   .filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
   .filter-set { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
