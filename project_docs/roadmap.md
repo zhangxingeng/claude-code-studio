@@ -375,6 +375,63 @@ triaged as a union and fixed together, then re-verified green before commit.
 intermediate state self-heals on the next sweep/restart — not permanent data loss). The real fix
 (single-instance enforcement via `tauri-plugin-single-instance`, or a cross-process file lock) is an
 app-wide decision beyond search's own scope, so it's tracked separately rather than bundled in.
+**Closed in Phase 11** (below).
+
+## Phase 11 — Two correctness fixes: engine-migration race + chat-edit corruption (DONE, 2026-07-07)
+
+Two unrelated bugs, fixed and committed separately.
+
+### #12 — cross-process migration race (`5b69b7b`)
+
+`ensure_engine_version` (`search/db.rs`) does the destructive wipe-and-reset described in Phase 10's
+follow-up note with no protection across processes. **Decision: a cross-process file lock, not
+`tauri-plugin-single-instance`** — the plugin route was considered but rejected because
+`SearchState::new()` (which calls `ensure_engine_version`) runs before the Tauri builder/plugin
+system even starts, so a plugin-based single-instance check couldn't preempt the race without a
+larger startup-order restructure. Instead, the whole check-and-reset now runs under an exclusive
+lock on a dotfile next to (not inside) the tantivy directory — surviving the `remove_dir_all` wipe.
+**Used `std::fs::File::lock`, stabilized in Rust 1.89, instead of adding a crate** — `fs4` was tried
+first, then dropped once the compiler pointed at std's own now-stable lock methods; net dependency
+change was zero. New regression test spawns two threads racing for the lock and asserts the waiter
+never acquires before the holder releases.
+
+### #13 — chat message editing could silently corrupt session JSONL (`dcb4442`)
+
+Founder report: editing a chat message produced a file Claude Code (the real CLI) no longer
+recognized — the session read back blank. **Root-caused with tests, not inspection** — a new
+adversarial round-trip suite (`tests/edit_roundtrip_smoke.mjs`) fuzzing `editDraft.ts` against
+deliberately hostile fixtures (duplicate uuids, integers past 2^53, unpaired UTF-16 surrogates,
+numeric-looking object keys) found two independent, real corruption bugs on the first run:
+
+1. **Duplicate-uuid row collision.** `buildDraft` keyed rows by uuid with no collision handling —
+   two lines sharing a uuid silently collapsed into one row, dropping the earlier line's content on
+   save. Fixed: fall back to `idx:<n>` whenever a uuid was already claimed by an earlier line in the
+   same file, so two rows can never merge.
+2. **Big-integer precision loss on every edit.** Every mutator round-tripped the *entire* line
+   through native `JSON.parse` → mutate → `JSON.stringify`, which coerces all numbers through a
+   float64 and silently rounds any integer past 2^53 — corrupting sibling numeric fields on any
+   edited line, not just the field actually touched. Confirmed: a sibling field of `9223372036854775807`
+   became `9223372036854776000` after an unrelated text edit. **Fixed by adopting the
+   [`lossless-json`](https://www.npmjs.com/package/lossless-json) library** (new dependency) in place
+   of every `JSON.parse`/`JSON.stringify` call in `editDraft.ts` — it preserves untouched numbers
+   byte-for-byte through the round trip. Side effect (intentional): its parser rejects duplicate JSON
+   keys within one line instead of native JSON's silent last-key-wins — stricter, not more permissive.
+
+`tests/edit_roundtrip_smoke.mjs` is now part of `pnpm test:smoke` permanently, checking two
+properties against both the real fixture and the adversarial ones: **identity round trip** (build →
+serialize with zero edits must reproduce the raw file byte-for-byte) and **edit fidelity** (editing
+one field must leave every sibling field byte/value-identical).
+
+**Not done:** no attempt was made to recover any session file already corrupted by the #13 bug
+before this fix landed — that's a separate, deliberate recovery task if the founder needs it.
+
+### Verification (Phase 11)
+
+`cargo test --lib`: 37/37 (36 + 1 new lock regression test). `pnpm check`: 0 errors/warnings.
+`pnpm test:smoke`: 105/105 assertions (98 + 7 new round-trip assertions). `pnpm build`: clean
+production build. `cargo build --lib`: zero warnings. **Not run:** `pnpm exec playwright test` — the
+sandbox this was built in hit `ENOSPC` (system file-watcher limit) starting Vite's dev server for
+Playwright, unrelated to this change; founder should run the e2e suite before shipping.
 
 ## Verification performed
 

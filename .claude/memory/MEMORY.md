@@ -51,6 +51,20 @@
   change (confirm before running it unprompted mid-task), not something to fold silently into an
   unrelated fix.
 
+- **When hunting a data-corruption bug, build a round-trip test to find it — don't reason from a code
+  read alone.** Confirmed 2026-07-07 (issue #13, chat-edit JSONL corruption): asked directly to write
+  an adversarial round-trip test (parse → mutate → serialize against hostile fixtures — duplicate
+  ids, numbers past 2^53, unpaired surrogates) rather than spot the bug by inspection. The test found
+  two real, independent bugs on the first run (a uuid-collision row drop, and float64 precision loss
+  on any untouched big-integer field) that code reading alone had not yet surfaced. **Why:** silent
+  corruption bugs are exactly the class a human reading code will rationalize past — the round trip
+  makes the drift observable and undeniable. **How to apply:** for any bug where a transform is
+  supposed to be lossless/idempotent (parse+reserialize, edit-in-place, format conversion), write the
+  round-trip property test *first*, run it against both real and deliberately adversarial input, and
+  let the failure output point at the bug — don't hand-trace the transform logic looking for it. Also
+  worth a default reflex: check for a purpose-built library (here, `lossless-json` for numeric-safe
+  JSON) before hand-rolling a fix for a known class of problem.
+
 - **Cut features people don't actually use — simple and lean beats impressive and idle.** Confirmed
   2026-07-06: don't keep a feature just because removing it feels like a regression. The founder wants
   code-maintenance budget spent on what people actually touch, not on machinery that sounds valuable but
