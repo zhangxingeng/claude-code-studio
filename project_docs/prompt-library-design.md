@@ -114,6 +114,19 @@ and a terminal is a worse text-composition surface than the browser. This replac
 - If the piece has placeholders, insertion first shows a compact **fill-in popover** (one field per
   token) before the span lands. Filled spans remember their template, so re-opening them can re-ask.
 
+**Engineering note (2026-07-06):** the matching engine for this live fuzzy search should be **local
+embeddings + a local vector index** — e.g. [fastembed-rs](https://github.com/Anush008/fastembed-rs)
+(local ONNX inference, no GPU needed, a small model like BGE-small/MiniLM) generating embeddings,
+queried via **[sqlite-vec](https://github.com/asg017/sqlite-vec)** (embedded vector KNN, sub-100ms at
+this library's expected scale). Optionally hybridize with **rapidfuzz-rs** lexical scoring so an exact
+keyword hit still ranks well even when its embedding similarity is only middling. This is a different
+engine than Deck's chat-history search (see `project_docs/search-design.md`'s "v2" section, tracked as
+issue #5) — chat search favors performance over a large, noisy corpus (tantivy, keyword-fuzzy); this
+feature favors intent/semantic quality over a small, curated corpus (local embeddings), and it's fine
+to pay more compute per query since volume is small. Deliberately two separate engines, not one shared
+abstraction — see the correction on issue #7. Both are fully local/offline, matching Deck's
+no-data-leaves-the-machine requirement.
+
 ### F3 — The piece modal (zoom-in): two modes
 
 Clicking any linked span opens a modal that "zooms in" on that piece. The modal has **two modes,
@@ -219,7 +232,10 @@ piece, with the same template-editing surface as everything else.
   prompt from the whole library given a short intent. Genuinely valuable but genuinely complex —
   **deferred**. Build the manual foundation (compose + pieces + fuzzy search + save) first; the JSON
   storage format is already RAG-ready when we get there. When built: **small, in-app, local** vector
-  index — privacy is a hard requirement, nothing leaves the machine.
+  index — privacy is a hard requirement, nothing leaves the machine. (Note: F2's live fuzzy search
+  already uses a local embedding + vector-index engine per the 2026-07-06 engineering note above —
+  this deferred item is the bigger step of auto-suggesting/auto-assembling a *whole prompt* from a
+  short intent, not simple per-piece matching, which lands in M1.)
 - **LLM features** (auto-tag, auto-category, RAG). When we add any LLM call, use an
   **OpenAI-compatible API interface** — most providers speak it now, keeps config to one base-URL +
   key. Bring-your-own-key, off by default, privacy-forward.

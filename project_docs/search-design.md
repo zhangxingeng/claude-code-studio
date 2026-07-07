@@ -1,15 +1,19 @@
 # Search — Design & Implementation Plan
 
-Status: **BUILT — all 12 milestones + all of Phase 2, including keyboard nav and the tool-name /
-current-session filters, as of 2026-07-04.** Backend: `src-tauri/src/search/{db,extract,index,
-query,state}.rs` — 30 unit/integration tests green. Frontend: `src/lib/search.svelte.ts` (store),
-`src/lib/components/SearchView.svelte`, wired into `src/routes/+page.svelte` (**Search** view) with
-jump-to-hit in `SessionEditor.svelte`. Phase 2's final two items (keyboard nav, tool-name/session
-filters) are now done — see `project_docs/roadmap.md` §Phase 4 for what shipped and the one known gap
-(no live entry point yet for "search within this session"). This doc is otherwise historical; new
-roadmap items live in `project_docs/roadmap.md`.
+Status: **BUILT (Phase 1/2) — all 12 milestones + all of Phase 2, including keyboard nav and the
+tool-name / current-session filters, as of 2026-07-04.** Backend: `src-tauri/src/search/{db,extract,
+index,query,state}.rs` — 30 unit/integration tests green. Frontend: `src/lib/search.svelte.ts`
+(store), consumed by `src/lib/components/BrowseView.svelte` (Browse + Search were later merged into
+one view — the original standalone `SearchView.svelte` no longer exists, see
+`project_docs/roadmap.md`) and `src/lib/components/InlineSearchPanel.svelte` ("find in this chat",
+mounted from `SessionEditor.svelte`). This doc is otherwise historical for Phase 1/2; build-progress
+items live in `project_docs/roadmap.md`.
 
-**Deviations from the spec below (intentional):**
+**See "v2 — fuzzy/intent search redesign" directly below for the current, in-progress design
+direction (tracked as issue #5) — it supersedes §2, §9, and parts of §12/§14 of the Phase 1/2 spec
+that follows it.**
+
+**Deviations from the Phase 1/2 spec below (intentional):**
 - `blocks` gained a **`uuid`** column — the frontend regroups entries into turns and flattens blocks,
   so raw `line_no` can't locate a hit; `(uuid, block_no)` survives regrouping and drives jump-to-hit.
 - The cold tier **scans** un-cached sessions for correctness but does **not** write the cache from the
@@ -17,7 +21,53 @@ roadmap items live in `project_docs/roadmap.md`.
 - Search opens a dedicated **read** connection (`db::open_read`, no schema DDL) so it never contends
   with the indexer's write transaction.
 
-Original spec follows.
+---
+
+## v2 — Fuzzy/intent search redesign (design decision, 2026-07-06 — not yet built, tracked as issue #5)
+
+Founder direction: drop exact/regex matching entirely. This tool's job is finding relevant fragments
+in a large pile of information-sparse chat history — that's an intent/fuzzy-match problem, not a
+precision-editing problem. Regex/whole-word/case-sensitive toggles were the right choice for a
+VS-Code-style *exact* search (§2 below), but that's the wrong tool for this job: real usage needs
+"find what I meant," not "find this literal string."
+
+**What changes vs. the Phase 1/2 design above:**
+- **Matching engine**: the `regex`-crate substring/regex scan (§9) is replaced by
+  **[tantivy](https://github.com/quickwit-oss/tantivy)** — an embedded Lucene-style index with BM25
+  relevance ranking and `FuzzyTermQuery` (Levenshtein-automaton typo tolerance). Chosen over
+  hand-rolling a fuzzy matcher (a large, well-trodden problem not worth re-solving) and over
+  `milli`/Meilisearch's embeddable core (better out-of-the-box relevance, but explicitly kept
+  pre-1.0/unstable by its own maintainers — worth a hands-on spike later only if tantivy's ranking
+  underwhelms, not the default pick). No Python/cross-language bridge needed — tantivy is pure Rust
+  and covers this use case at the required ~1GB scale.
+- **Storage**: tantivy owns its own on-disk index in place of the `blocks` SQLite table and the regex
+  row-scan in `query.rs`. The `session_files` fingerprint table (mtime/size invalidation) is unrelated
+  to the matching algorithm and stays as-is.
+- **Extraction** (`extract.rs`), **indexer sweep/invalidation** (`index.rs`'s no-filesystem-watcher,
+  mtime/size fingerprinting), and **streaming + cancellation** (`state.rs`'s `Channel<SearchHit>` +
+  atomic generation counter) are all orthogonal to regex-vs-fuzzy and carry over unchanged in spirit —
+  only their write target moves from a SQLite `INSERT` to a tantivy `IndexWriter`.
+- **Frontend**: the three VS-Code-style toggle buttons (case-sensitive / whole-word / regex) are
+  removed entirely — no "advanced mode" escape hatch. This does not lose exact-match capability: BM25
+  + fuzzy ranking still surfaces exact/near-exact hits first, it just removes manual strictness
+  control. Source/project/date-range/tool-name filters are unrelated to match mode and are kept as-is.
+- **Result ordering**: changes from "session mtime desc, append-only" (§8, step 3) to genuine
+  relevance ranking. This is an intentional upgrade, not a side effect to minimize — recency ordering
+  was a proxy for relevance in the absence of real ranking.
+
+**Known engineering risk to spike early**: tantivy's fuzzy hits currently score on par with exact hits
+(open upstream issue) — will likely need a small custom scorer/boost so exact matches still rank above
+fuzzy ones.
+
+**Shared-engine question (prompt library, issue #7)**: prompt-library search has a different tradeoff
+profile (small volume, quality/intent over performance) and is **not** sharing this tantivy engine —
+see `project_docs/prompt-library-design.md` §F2 for its own (local-embedding-based) approach. Chat
+search and prompt search are deliberately two separate engines, not one abstraction forced to fit
+both.
+
+---
+
+Phase 1/2 spec follows (superseded in part — see the callouts above).
 
 ---
 
