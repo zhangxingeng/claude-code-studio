@@ -9,9 +9,8 @@ one view — the original standalone `SearchView.svelte` no longer exists, see
 mounted from `SessionEditor.svelte`). This doc is otherwise historical for Phase 1/2; build-progress
 items live in `project_docs/roadmap.md`.
 
-**See "v2 — fuzzy/intent search redesign" directly below for the current, in-progress design
-direction (tracked as issue #5) — it supersedes §2, §9, and parts of §12/§14 of the Phase 1/2 spec
-that follows it.**
+**See "v2 — fuzzy/intent search redesign" directly below — BUILT and shipped 2026-07-07 (issue #5,
+closed) — it supersedes §2, §9, and parts of §12/§14 of the Phase 1/2 spec that follows it.**
 
 **Deviations from the Phase 1/2 spec below (intentional):**
 - `blocks` gained a **`uuid`** column (historical — the `blocks` table itself is gone as of the v2
@@ -27,7 +26,7 @@ that follows it.**
 
 ---
 
-## v2 — Fuzzy/intent search redesign (backend BUILT 2026-07-07, tracked as issue #5)
+## v2 — Fuzzy/intent search redesign (BUILT 2026-07-07, closes issue #5)
 
 Founder direction: drop exact/regex matching entirely. This tool's job is finding relevant fragments
 in a large pile of information-sparse chat history — that's an intent/fuzzy-match problem, not a
