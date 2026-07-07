@@ -247,7 +247,11 @@ worktree-isolated, to respect the pre-commit-stash trap) rather than concurrentl
   misclassify a line). **Decision: replaced with `serde_json`** (already a direct dependency) parsing
   each line once into a small `#[serde(default)]` struct — fixes both bugs in one idiomatic move.
   The write-side `json_replace_str_value` was deliberately left as a surgical string edit (round-
-  tripping through serde would reformat lines the real Claude Code CLI also reads).
+  tripping through serde would reformat lines the real Claude Code CLI also reads). While building
+  this, `get-context` routing surfaced a corpus gap — no Rust/Tauri coding protocol exists under
+  `ai-first-docs/stack/` (unlike `svelte`/`sveltekit`), so this fell back to generic
+  `craft/code/coding_principles` only. Filed as
+  [`ai-first-docs#16`](https://github.com/zhangxingeng/ai-first-docs/issues/16) rather than dropped.
 - **`fix(#11, 8f5105f)`** — two unenforced behavioral contracts: `write_claude_settings` had no
   read-modify-write guard (a concurrent external write got silently clobbered); `write_session`'s
   "caller MUST snapshot first" doc comment was never checked. **Decision: fix both.** Added an

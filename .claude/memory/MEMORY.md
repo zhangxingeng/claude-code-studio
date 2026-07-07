@@ -50,3 +50,14 @@
   than preserving old-version compatibility — but treat a broad dependency bump as its own reviewable
   change (confirm before running it unprompted mid-task), not something to fold silently into an
   unrelated fix.
+
+- **Cut features people don't actually use — simple and lean beats impressive and idle.** Confirmed
+  2026-07-06: don't keep a feature just because removing it feels like a regression. The founder wants
+  code-maintenance budget spent on what people actually touch, not on machinery that sounds valuable but
+  sees near-zero real usage. **Why:** every unused feature is upkeep with no return, and it's the exact
+  reasoning behind issue #6 (chat-viewer trim) — editing a message is already rare, editing tool-call/
+  thinking content is structurally impossible, so the version-control/diff/draft machinery around chat
+  edits had no usage to justify itself. **How to apply:** when scoping or reviewing a feature, ask what
+  fraction of real usage actually exercises each piece — cut the pieces that don't, even inside features
+  that are themselves justified. Full writeup with the worked example:
+  `ai-first-docs/craft/team/user_preferences_reference.mdx` ("Feature scope" section).
