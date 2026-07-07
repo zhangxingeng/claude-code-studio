@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 // Search: SQLite-backed extracted-text cache (built up over milestones 1–12).
@@ -95,35 +95,105 @@ fn sanitize_id(s: &str) -> String {
         .collect()
 }
 
-/// Return the quoted string value immediately following `key_token` in `line`, if present.
-/// Handles simple `\"` escape sequences; good enough for these well-known key tokens.
-fn json_str_after(line: &str, key_token: &str) -> Option<String> {
-    let start = line.find(key_token)?;
-    let rest = &line[start + key_token.len()..];
-    let mut result = String::new();
-    let mut chars = rest.chars();
-    while let Some(c) = chars.next() {
-        if c == '"' {
-            return Some(result);
-        } else if c == '\\' {
-            if let Some(escaped) = chars.next() {
-                match escaped {
-                    '"' => result.push('"'),
-                    '\\' => result.push('\\'),
-                    'n' => result.push('\n'),
-                    'r' => result.push('\r'),
-                    't' => result.push('\t'),
-                    _ => {
-                        result.push('\\');
-                        result.push(escaped);
-                    }
-                }
+/// The top-level fields the per-line scan (`scan_session_lines`) needs from a
+/// session JSONL line. Parsed once via `serde_json` per line — this replaces
+/// the old hand-rolled `json_str_after` substring scanner, which (a) only
+/// decoded `\" \\ \n \r \t` and mangled every other JSON escape (`\uXXXX`,
+/// `\/`, `\b`, `\f`), and (b) matched its key tokens anywhere in the line,
+/// including inside nested string content, so a message whose text happened
+/// to contain `"type":"..."` could be misclassified. `#[serde(default)]`
+/// means any field simply absent on a given line (most lines don't carry all
+/// of these) deserializes to its default instead of erroring.
+#[derive(Deserialize, Default)]
+struct SessionLineFields {
+    #[serde(default, rename = "type")]
+    line_type: String,
+    #[serde(default)]
+    timestamp: String,
+    #[serde(default)]
+    cwd: String,
+    #[serde(default, rename = "customTitle")]
+    custom_title: String,
+    #[serde(default)]
+    message: SessionLineMessage,
+}
+
+/// `model` lives nested under `message.model` on assistant lines (confirmed
+/// against real `~/.claude/projects/**/*.jsonl` session files) — never at the
+/// line's top level.
+#[derive(Deserialize, Default)]
+struct SessionLineMessage {
+    #[serde(default)]
+    model: String,
+}
+
+/// Cheap one-pass stats `list_sessions` needs per session file, computed by
+/// `scan_session_lines`. Split out from the `list_sessions` command so the
+/// scan itself — the part with real parsing logic — is testable as a pure
+/// function of file content, without touching the filesystem.
+#[derive(Debug, Default, PartialEq)]
+struct SessionScanStats {
+    line_count: u64,
+    user_count: u64,
+    assistant_count: u64,
+    models: Vec<String>,
+    first_ts: String,
+    last_ts: String,
+    cwd: String,
+    custom_title: String,
+}
+
+/// Scan every non-empty line of a session file's content once, parsing each
+/// line as JSON to extract `type`, `timestamp`, `cwd`, `customTitle`, and
+/// `message.model`. A line that fails to parse as JSON is silently skipped
+/// (still counted in `line_count`, matching the old scanner's
+/// silent-skip-on-no-match behavior) rather than failing the whole scan.
+fn scan_session_lines(content: &str) -> SessionScanStats {
+    let mut stats = SessionScanStats::default();
+
+    for line in content.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        stats.line_count += 1;
+
+        let Ok(fields) = serde_json::from_str::<SessionLineFields>(line) else {
+            continue;
+        };
+
+        match fields.line_type.as_str() {
+            "user" => stats.user_count += 1,
+            "assistant" => stats.assistant_count += 1,
+            _ => {}
+        }
+
+        if !fields.message.model.is_empty() && !stats.models.contains(&fields.message.model) {
+            stats.models.push(fields.message.model);
+        }
+
+        if !fields.timestamp.is_empty() {
+            if stats.first_ts.is_empty() {
+                stats.first_ts = fields.timestamp.clone();
             }
-        } else {
-            result.push(c);
+            stats.last_ts = fields.timestamp;
+        }
+
+        // The encoded project dir name is lossy ('/' -> '-'), so prefer the
+        // real cwd recorded on the JSONL lines themselves (first-seen).
+        if stats.cwd.is_empty() && !fields.cwd.is_empty() {
+            stats.cwd = fields.cwd;
+        }
+
+        // Renames can land anywhere in the file (Claude Code's own /rename
+        // appends near wherever the conversation currently is), so this must
+        // scan the whole file, not just the 50-line preview — and last-wins,
+        // since a later rename supersedes an earlier one.
+        if !fields.custom_title.is_empty() {
+            stats.custom_title = fields.custom_title;
         }
     }
-    None // no closing quote found
+
+    stats
 }
 
 /// Find `key_token` (e.g. `"\"sessionId\":\""`) in `line` and replace the quoted
@@ -243,64 +313,16 @@ fn list_sessions() -> Result<Vec<SessionMeta>, String> {
             let preview: Vec<String> = content.lines().take(50).map(|l| l.to_string()).collect();
 
             // --- Cheap one-pass stats ---
-            let mut line_count: u64 = 0;
-            let mut user_count: u64 = 0;
-            let mut assistant_count: u64 = 0;
-            let mut models: Vec<String> = Vec::new();
-            let mut first_ts: String = String::new();
-            let mut last_ts: String = String::new();
-            let mut cwd: String = String::new();
-            let mut custom_title: String = String::new();
-
-            for line in content.lines() {
-                if line.is_empty() {
-                    continue;
-                }
-                line_count += 1;
-
-                if let Some(ty) = json_str_after(line, "\"type\":\"") {
-                    match ty.as_str() {
-                        "user" => user_count += 1,
-                        "assistant" => assistant_count += 1,
-                        _ => {}
-                    }
-                }
-
-                if let Some(model) = json_str_after(line, "\"model\":\"") {
-                    if !model.is_empty() && !models.contains(&model) {
-                        models.push(model);
-                    }
-                }
-
-                if let Some(ts) = json_str_after(line, "\"timestamp\":\"") {
-                    if !ts.is_empty() {
-                        if first_ts.is_empty() {
-                            first_ts = ts.clone();
-                        }
-                        last_ts = ts;
-                    }
-                }
-
-                // The encoded project dir name is lossy ('/' -> '-'), so prefer the
-                // real cwd recorded on the JSONL lines themselves (first-seen).
-                if cwd.is_empty() {
-                    if let Some(c) = json_str_after(line, "\"cwd\":\"") {
-                        if !c.is_empty() {
-                            cwd = c;
-                        }
-                    }
-                }
-
-                // Renames can land anywhere in the file (Claude Code's own /rename
-                // appends near wherever the conversation currently is), so this must
-                // scan the whole file, not just the 50-line preview — and last-wins,
-                // since a later rename supersedes an earlier one.
-                if let Some(ct) = json_str_after(line, "\"customTitle\":\"") {
-                    if !ct.is_empty() {
-                        custom_title = ct;
-                    }
-                }
-            }
+            let SessionScanStats {
+                line_count,
+                user_count,
+                assistant_count,
+                models,
+                first_ts,
+                last_ts,
+                cwd,
+                custom_title,
+            } = scan_session_lines(&content);
 
             // Count subagent *.jsonl files (not .meta.json) in the sibling subagents/ dir.
             let subagent_count: u64 = {
@@ -821,6 +843,67 @@ mod resume_tests {
         assert!(result.is_err());
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod session_scan_tests {
+    use super::*;
+
+    /// `\uXXXX` and `\/` escapes must decode correctly (the old hand-rolled
+    /// scanner only handled `\" \\ \n \r \t` and emitted a stray literal
+    /// backslash for everything else).
+    #[test]
+    fn decodes_unicode_and_escaped_slash() {
+        let line = concat!(
+            r#"{"type":"user","cwd":"/home/user\/project","#,
+            r#""customTitle":"Café chat","timestamp":"2026-01-01T00:00:00Z","#,
+            r#""message":{"role":"user","content":"hi"}}"#,
+        );
+        let stats = scan_session_lines(line);
+        assert_eq!(stats.cwd, "/home/user/project", "\\/ must decode to a plain slash");
+        assert_eq!(stats.custom_title, "Café chat", "\\u00e9 must decode to é");
+        assert_eq!(stats.first_ts, "2026-01-01T00:00:00Z");
+        assert_eq!(stats.user_count, 1);
+    }
+
+    /// A nested string value that itself contains a literal `"type":"user"`
+    /// substring must NOT be misread as the line's top-level type — the old
+    /// scanner's unscoped `line.find(key_token)` would match this.
+    #[test]
+    fn nested_type_substring_is_not_misread_as_top_level() {
+        let line = r#"{"type":"assistant","message":{"model":"claude-fable-5","content":"Example JSON in my answer: \"type\":\"user\""}}"#;
+        let stats = scan_session_lines(line);
+        assert_eq!(stats.assistant_count, 1, "must classify by the real top-level type");
+        assert_eq!(stats.user_count, 0, "nested \"type\":\"user\" text must not count as a user line");
+        assert_eq!(stats.models, vec!["claude-fable-5".to_string()], "message.model must still be read correctly");
+    }
+
+    /// A line that isn't valid JSON is silently skipped (still counted in
+    /// `line_count`), matching the old scanner's silent-skip-on-no-match
+    /// behavior — it must not panic or abort the rest of the scan.
+    #[test]
+    fn malformed_line_is_skipped_not_fatal() {
+        let content = concat!(
+            "not json at all\n",
+            r#"{"type":"user","timestamp":"2026-01-01T00:00:00Z"}"#, "\n",
+        );
+        let stats = scan_session_lines(content);
+        assert_eq!(stats.line_count, 2, "both non-empty lines are counted");
+        assert_eq!(stats.user_count, 1, "only the valid line is classified");
+        assert_eq!(stats.first_ts, "2026-01-01T00:00:00Z");
+    }
+
+    /// `model` lives at `message.model`, never at the line's top level.
+    #[test]
+    fn model_is_read_from_nested_message_field() {
+        let content = concat!(
+            r#"{"type":"assistant","message":{"model":"claude-a"}}"#, "\n",
+            r#"{"type":"assistant","message":{"model":"claude-b"}}"#, "\n",
+            r#"{"type":"assistant","message":{"model":"claude-a"}}"#, "\n",
+        );
+        let stats = scan_session_lines(content);
+        assert_eq!(stats.models, vec!["claude-a".to_string(), "claude-b".to_string()], "distinct models, first-seen order");
     }
 }
 
