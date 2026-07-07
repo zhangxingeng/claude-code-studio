@@ -1,36 +1,32 @@
-//! The matcher: turn a query + toggles into a `Regex`, prefilter candidate
-//! blocks with SQL, scan them, and build snippet hits.
+//! The matcher: turn a query string into a tantivy `BooleanQuery` — an
+//! exact-term clause boosted above a same-token `FuzzyTermQuery` clause,
+//! unioned across query tokens — combined with the caller's filters, ranked
+//! by BM25. Replaces the old regex-crate substring/whole-word/regex scan
+//! (issue #5: fuzzy/intent search over precision-editing tooling).
 //!
-//! All three query modes (plain / whole-word / regex) unify through the `regex`
-//! crate — plain is just `regex::escape`d, whole-word wraps in `\b…\b`. The
-//! crate's literal prefiltering keeps even a full-column scan fast.
+//! Also carries a small substring-based cold-path matcher for session files
+//! not yet reflected in the tantivy index (see `state.rs`'s cold tier) — a
+//! deliberately simpler fallback than building a throwaway tantivy index per
+//! uncached file.
 
-use rusqlite::types::Value;
-use rusqlite::Connection;
+use std::ops::Bound;
+
 use serde::{Deserialize, Serialize};
+use tantivy::collector::{Count, TopDocs};
+use tantivy::query::{BooleanQuery, BoostQuery, FuzzyTermQuery, Occur, Query, RangeQuery, TermQuery};
+use tantivy::schema::{document::Value, IndexRecordOption};
+use tantivy::snippet::SnippetGenerator;
+use tantivy::{Index, Searcher, TantivyDocument, Term};
 
-use regex::{Regex, RegexBuilder};
+use super::index::SearchSchema;
 
-/// Check the cancellation flag every this many candidate rows (cheap atomic
-/// load; no need to hit it on literally every row).
-const CANCEL_CHECK_EVERY: usize = 64;
-
-/// How much text around the first match to include in a snippet (bytes, snapped
-/// to char boundaries).
-const WINDOW_BEFORE: usize = 60;
-const WINDOW_AFTER: usize = 180;
-
-/// VS Code-style search toggles.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchOpts {
-    #[serde(default)]
-    pub case_sensitive: bool,
-    #[serde(default)]
-    pub whole_word: bool,
-    #[serde(default)]
-    pub regex: bool,
-}
+/// Boost applied to an exact-term clause over its sibling fuzzy clause, so an
+/// exact/near-exact match ranks above a loosely-fuzzy one (tantivy's fuzzy hits
+/// otherwise score on par with exact hits — the risk flagged in issue #5).
+const EXACT_BOOST: f32 = 3.0;
+/// Levenshtein distance tolerated by the fuzzy clause (typo tolerance).
+const FUZZY_DISTANCE: u8 = 1;
+const SNIPPET_MAX_CHARS: usize = 240;
 
 /// Query-time filters. Empty `sources`/`projects` mean "no restriction".
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -47,9 +43,7 @@ pub struct SearchFilters {
     #[serde(default)]
     pub projects: Vec<String>,
     /// Restrict to `tool_use` blocks for this exact tool name (e.g. "Bash",
-    /// "Edit"). Tool-use text is either exactly the tool name or
-    /// `"{name}\n{flattened input}"` (see `extract.rs`), so this is a prefix
-    /// match. Overrides `sources` for matching purposes: a hit must be a
+    /// "Edit"). Overrides `sources` for matching purposes: a hit must be a
     /// `tool_use` block for this tool regardless of what's in `sources`.
     #[serde(default)]
     pub tool_name: Option<String>,
@@ -64,16 +58,17 @@ pub struct SearchFilters {
 pub struct SearchSummary {
     /// Number of hits emitted.
     pub hits: usize,
-    /// Number of candidate blocks scanned (post SQL-prefilter).
+    /// Total number of matching blocks found (before the `limit` truncation).
     pub scanned: usize,
     /// True if a newer search superseded this one before it finished.
     pub cancelled: bool,
-    /// True if the scan stopped early because it hit the optional `limit`.
+    /// True if the result set stopped early because it hit the optional `limit`.
     pub truncated: bool,
 }
 
-/// One search result: a matched block plus a windowed snippet and the match
-/// offsets (in *chars*, so the JS side can slice with `Array.from`).
+/// One search result: a matched block plus a windowed snippet, the match
+/// offsets (in *chars*, so the JS side can slice with `Array.from`), and its
+/// relevance score (BM25 + the exact/fuzzy boost — highest first).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
@@ -86,25 +81,184 @@ pub struct SearchHit {
     pub source: String,
     pub snippet: String,
     pub match_ranges: Vec<(u32, u32)>,
+    pub score: f32,
 }
 
-/// Compile the query into a `Regex`, honouring the toggles. A bad regex (in
-/// regex mode) surfaces as an `Err(String)` the UI shows as a gentle hint.
-pub fn build_regex(query: &str, opts: &SearchOpts) -> Result<Regex, String> {
-    let base = if opts.regex {
-        query.to_string()
-    } else {
-        regex::escape(query)
-    };
-    let pattern = if opts.whole_word {
-        format!(r"\b{base}\b")
-    } else {
-        base
-    };
-    RegexBuilder::new(&pattern)
-        .case_insensitive(!opts.case_sensitive)
-        .build()
-        .map_err(|e| e.to_string())
+/// Tokenize a query string with the index's default analyzer — the same
+/// analyzer that indexed the `text` field, so query tokens line up with the
+/// terms in the index.
+pub(crate) fn tokenize(index: &Index, text: &str) -> Result<Vec<String>, String> {
+    let mut analyzer = index
+        .tokenizers()
+        .get("default")
+        .ok_or("default tokenizer not registered")?;
+    let mut stream = analyzer.token_stream(text);
+    let mut tokens = Vec::new();
+    while stream.advance() {
+        tokens.push(stream.token().text.clone());
+    }
+    Ok(tokens)
+}
+
+fn term_query(field: tantivy::schema::Field, value: &str) -> Box<dyn Query> {
+    Box::new(TermQuery::new(
+        Term::from_field_text(field, value),
+        IndexRecordOption::Basic,
+    ))
+}
+
+fn should_group(clauses: Vec<Box<dyn Query>>) -> Box<dyn Query> {
+    Box::new(BooleanQuery::new(
+        clauses.into_iter().map(|q| (Occur::Should, q)).collect(),
+    ))
+}
+
+/// Build the full query: an exact-boosted/fuzzy union per query token, ANDed
+/// with the caller's filters. `Ok(None)` for an empty/whitespace-only query —
+/// callers treat that as "no results" without running a search.
+pub fn build_query(
+    index: &Index,
+    schema: &SearchSchema,
+    query_str: &str,
+    filters: &SearchFilters,
+) -> Result<Option<BooleanQuery>, String> {
+    let tokens = tokenize(index, query_str)?;
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+
+    let token_clauses: Vec<Box<dyn Query>> = tokens
+        .iter()
+        .map(|tok| {
+            let term = Term::from_field_text(schema.text, tok);
+            let exact: Box<dyn Query> = Box::new(BoostQuery::new(
+                Box::new(TermQuery::new(term.clone(), IndexRecordOption::WithFreqsAndPositions)),
+                EXACT_BOOST,
+            ));
+            let fuzzy: Box<dyn Query> =
+                Box::new(FuzzyTermQuery::new(term, FUZZY_DISTANCE, true));
+            should_group(vec![exact, fuzzy])
+        })
+        .collect();
+    let text_query = should_group(token_clauses);
+
+    let mut must: Vec<(Occur, Box<dyn Query>)> = vec![(Occur::Must, text_query)];
+
+    if let Some(tool_name) = &filters.tool_name {
+        must.push((Occur::Must, term_query(schema.tool_name, tool_name)));
+    } else if !filters.sources.is_empty() {
+        let group = should_group(
+            filters
+                .sources
+                .iter()
+                .map(|s| term_query(schema.source, s))
+                .collect(),
+        );
+        must.push((Occur::Must, group));
+    }
+
+    if !filters.projects.is_empty() {
+        let group = should_group(
+            filters
+                .projects
+                .iter()
+                .map(|p| term_query(schema.project, p))
+                .collect(),
+        );
+        must.push((Occur::Must, group));
+    }
+
+    if filters.from.is_some() || filters.to.is_some() {
+        let lower = filters
+            .from
+            .map(|v| Bound::Included(Term::from_field_i64(schema.ts, v)))
+            .unwrap_or(Bound::Unbounded);
+        let upper = filters
+            .to
+            .map(|v| Bound::Included(Term::from_field_i64(schema.ts, v)))
+            .unwrap_or(Bound::Unbounded);
+        must.push((Occur::Must, Box::new(RangeQuery::new(lower, upper))));
+    }
+
+    if let Some(session_path) = &filters.session_path {
+        must.push((Occur::Must, term_query(schema.session_path, session_path)));
+    }
+
+    Ok(Some(BooleanQuery::new(must)))
+}
+
+fn get_str(doc: &TantivyDocument, field: tantivy::schema::Field) -> String {
+    doc.get_first(field)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn get_i64(doc: &TantivyDocument, field: tantivy::schema::Field) -> i64 {
+    doc.get_first(field).and_then(|v| v.as_i64()).unwrap_or(0)
+}
+
+/// Run the built query against the warm tantivy index: collect the top
+/// `limit` hits by relevance plus the total match count, and build a
+/// highlighted snippet for each. Hits come back already sorted by score desc
+/// (tantivy's `TopDocs` collector sorts internally) — no separate buffering
+/// step needed for relevance ordering.
+pub fn search_warm(
+    searcher: &Searcher,
+    schema: &SearchSchema,
+    query: &dyn Query,
+    limit: usize,
+) -> Result<(usize, Vec<SearchHit>), String> {
+    let top = searcher
+        .search(query, &TopDocs::with_limit(limit).order_by_score())
+        .map_err(|e| e.to_string())?;
+    let total = searcher.search(query, &Count).map_err(|e| e.to_string())?;
+
+    let mut snippet_gen =
+        SnippetGenerator::create(searcher, query, schema.text).map_err(|e| e.to_string())?;
+    snippet_gen.set_max_num_chars(SNIPPET_MAX_CHARS);
+
+    let mut hits = Vec::with_capacity(top.len());
+    for (score, addr) in top {
+        let doc: TantivyDocument = searcher.doc(addr).map_err(|e| e.to_string())?;
+        let text = get_str(&doc, schema.text);
+        let snippet = snippet_gen.snippet_from_doc(&doc);
+        let fragment = snippet.fragment();
+        let match_ranges: Vec<(u32, u32)> = snippet
+            .highlighted()
+            .iter()
+            .map(|r| {
+                let cs = fragment[..r.start].chars().count() as u32;
+                let ce = fragment[..r.end].chars().count() as u32;
+                (cs, ce)
+            })
+            .collect();
+        // A fuzzy-only match may not literally contain the query term, so the
+        // snippet generator can return an empty fragment — fall back to a
+        // plain leading excerpt of the stored text so the hit still has
+        // something to show.
+        let snippet_text = if fragment.is_empty() {
+            text.chars().take(SNIPPET_MAX_CHARS).collect()
+        } else {
+            fragment.to_string()
+        };
+
+        let ts_val = get_i64(&doc, schema.ts);
+        hits.push(SearchHit {
+            session_path: get_str(&doc, schema.session_path),
+            project: get_str(&doc, schema.project),
+            ts: if ts_val == 0 { None } else { Some(ts_val) },
+            line_no: get_i64(&doc, schema.line_no),
+            block_no: get_i64(&doc, schema.block_no),
+            uuid: get_str(&doc, schema.uuid),
+            source: get_str(&doc, schema.source),
+            snippet: snippet_text,
+            match_ranges,
+            score,
+        });
+    }
+
+    Ok((total, hits))
 }
 
 fn floor_boundary(s: &str, mut i: usize) -> usize {
@@ -127,14 +281,30 @@ fn ceil_boundary(s: &str, mut i: usize) -> usize {
     i
 }
 
-/// Build a windowed snippet around the first match, with char-offset ranges for
-/// every match that falls inside the window. Returns `None` if nothing matches.
-pub fn build_snippet(text: &str, re: &Regex) -> Option<(String, Vec<(u32, u32)>)> {
-    let matches: Vec<(usize, usize)> = re.find_iter(text).map(|m| (m.start(), m.end())).collect();
-    let (first_start, first_end) = *matches.first()?;
+const COLD_WINDOW_BEFORE: usize = 60;
+const COLD_WINDOW_AFTER: usize = 180;
 
-    let win_start = floor_boundary(text, first_start.saturating_sub(WINDOW_BEFORE));
-    let win_end = ceil_boundary(text, first_end.saturating_add(WINDOW_AFTER).min(text.len()));
+/// Cold-path match: every query token must appear as a case-insensitive
+/// substring (a simpler, non-fuzzy stand-in used only for session files not
+/// yet reflected in the tantivy index — see `state.rs`'s cold tier). Returns
+/// a windowed snippet around the earliest token match, with char-offset
+/// ranges for every token occurrence inside that window.
+pub fn cold_match(text: &str, tokens: &[String]) -> Option<(String, Vec<(u32, u32)>)> {
+    if tokens.is_empty() {
+        return None;
+    }
+    let lower = text.to_lowercase();
+    let mut first = usize::MAX;
+    for tok in tokens {
+        let pos = lower.find(tok.as_str())?;
+        first = first.min(pos);
+    }
+
+    let win_start = floor_boundary(&lower, first.saturating_sub(COLD_WINDOW_BEFORE));
+    let win_end = ceil_boundary(
+        &lower,
+        (first + COLD_WINDOW_AFTER).min(lower.len()),
+    );
 
     let mut snippet = String::new();
     let lead = win_start > 0;
@@ -146,443 +316,136 @@ pub fn build_snippet(text: &str, re: &Regex) -> Option<(String, Vec<(u32, u32)>)
         snippet.push('…');
     }
 
-    // Char offset of the window start within the snippet (1 if a leading '…').
     let base_chars = if lead { 1u32 } else { 0 };
-    let ranges = matches
-        .iter()
-        .filter(|(s, e)| *s >= win_start && *e <= win_end)
-        .map(|(s, e)| {
-            let cs = base_chars + text[win_start..*s].chars().count() as u32;
-            let ce = base_chars + text[win_start..*e].chars().count() as u32;
-            (cs, ce)
-        })
-        .collect();
-
-    Some((snippet, ranges))
-}
-
-/// Escape `\`, `%`, `_` so a user-supplied tool name is matched literally in a
-/// `LIKE ... ESCAPE '\'` pattern (tool names aren't expected to contain SQL
-/// wildcards, but this keeps the filter correct if one ever does).
-fn escape_like(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
-}
-
-/// Push a `?,?,…` placeholder group for an IN clause and its bound values.
-fn push_in_clause(
-    where_parts: &mut Vec<String>,
-    params: &mut Vec<Value>,
-    column: &str,
-    items: &[String],
-) {
-    if items.is_empty() {
-        return;
-    }
-    let placeholders = vec!["?"; items.len()].join(",");
-    where_parts.push(format!("{column} IN ({placeholders})"));
-    for it in items {
-        params.push(Value::Text(it.clone()));
-    }
-}
-
-/// Build the candidate-selection SQL + bound params from the filters. Candidates
-/// come back recency-first (session mtime desc, then file order) so streamed
-/// results are stable/append-only.
-fn candidate_sql(filters: &SearchFilters) -> (String, Vec<Value>) {
-    let mut where_parts: Vec<String> = Vec::new();
-    let mut params: Vec<Value> = Vec::new();
-
-    if let Some(tool_name) = &filters.tool_name {
-        // A tool-name filter narrows to tool_use blocks for that tool,
-        // regardless of what `sources` says — so it replaces the sources
-        // IN-clause rather than ANDing with it (which would always be empty,
-        // since `sources` would rarely include "tool_use" and "tool_name" only
-        // makes sense there).
-        where_parts.push("(b.source = 'tool_use' AND (b.text = ? OR b.text LIKE ? ESCAPE '\\'))".to_string());
-        params.push(Value::Text(tool_name.clone()));
-        params.push(Value::Text(format!("{}\n%", escape_like(tool_name))));
-    } else {
-        push_in_clause(&mut where_parts, &mut params, "b.source", &filters.sources);
-    }
-    push_in_clause(&mut where_parts, &mut params, "b.project", &filters.projects);
-    if let Some(from) = filters.from {
-        where_parts.push("b.ts >= ?".to_string());
-        params.push(Value::Integer(from));
-    }
-    if let Some(to) = filters.to {
-        where_parts.push("b.ts <= ?".to_string());
-        params.push(Value::Integer(to));
-    }
-    if let Some(session_path) = &filters.session_path {
-        where_parts.push("b.session_path = ?".to_string());
-        params.push(Value::Text(session_path.clone()));
-    }
-
-    let where_sql = if where_parts.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", where_parts.join(" AND "))
-    };
-    let sql = format!(
-        "SELECT b.session_path, b.project, b.ts, b.line_no, b.block_no, b.uuid, b.source, b.text
-         FROM blocks b
-         JOIN session_files sf ON b.session_path = sf.session_path
-         {where_sql}
-         ORDER BY sf.mtime DESC, b.rowid ASC"
-    );
-    (sql, params)
-}
-
-/// Does a block pass the source/date/tool-name filters? (Project and session
-/// path are filtered per-file, not here — see `state.rs`'s cold-path loop.)
-fn passes_source_and_date(source: &str, text: &str, ts: Option<i64>, filters: &SearchFilters) -> bool {
-    if let Some(tool_name) = &filters.tool_name {
-        // A tool-name filter narrows to tool_use blocks for that tool,
-        // regardless of what `sources` says.
-        if source != "tool_use" {
-            return false;
-        }
-        if text != tool_name.as_str() && !text.starts_with(&format!("{tool_name}\n")) {
-            return false;
-        }
-    } else if !filters.sources.is_empty() && !filters.sources.iter().any(|s| s == source) {
-        return false;
-    }
-    if let Some(from) = filters.from {
-        if !matches!(ts, Some(t) if t >= from) {
-            return false;
-        }
-    }
-    if let Some(to) = filters.to {
-        if !matches!(ts, Some(t) if t <= to) {
-            return false;
-        }
-    }
-    true
-}
-
-/// Cold-path scan: apply the same filters + regex to freshly-extracted blocks
-/// from a session not yet in the cache. Emits a hit per match. `remaining` is an
-/// optional upper bound on how many hits to emit (from the overall search limit,
-/// taking already-emitted warm hits into account). Returns the count actually
-/// emitted.
-pub fn scan_blocks<E: FnMut(SearchHit)>(
-    session_path: &str,
-    project: &str,
-    blocks: &[super::extract::ExtractedBlock],
-    re: &Regex,
-    filters: &SearchFilters,
-    remaining: Option<usize>,
-    emit: &mut E,
-) -> usize {
-    let mut n = 0;
-    for b in blocks {
-        if let Some(max) = remaining {
-            if n >= max { break; }
-        }
-        if !passes_source_and_date(&b.source, &b.text, b.ts, filters) {
-            continue;
-        }
-        if let Some((snippet, match_ranges)) = build_snippet(&b.text, re) {
-            emit(SearchHit {
-                session_path: session_path.to_string(),
-                project: project.to_string(),
-                ts: b.ts,
-                line_no: b.line_no,
-                block_no: b.block_no,
-                uuid: b.uuid.clone(),
-                source: b.source.clone(),
-                snippet,
-                match_ranges,
-            });
-            n += 1;
-        }
-    }
-    n
-}
-
-/// Warm-path streaming search. SQL-prefilters candidate blocks, scans each with
-/// the (prebuilt) regex, and calls `emit` for every hit as it's found.
-/// `cancelled` is polled periodically; when it returns true the scan stops
-/// promptly (a newer search has superseded this one). When `limit` is `Some(n)`,
-/// the scan stops after `n` hits and sets `summary.truncated = true`.
-pub fn search_streaming<E, C>(
-    conn: &Connection,
-    re: &Regex,
-    filters: &SearchFilters,
-    limit: Option<usize>,
-    mut emit: E,
-    cancelled: C,
-) -> Result<SearchSummary, String>
-where
-    E: FnMut(SearchHit),
-    C: Fn() -> bool,
-{
-    let mut summary = SearchSummary::default();
-    let (sql, params) = candidate_sql(filters);
-
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let mut rows = stmt
-        .query(rusqlite::params_from_iter(params))
-        .map_err(|e| e.to_string())?;
-
-    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        summary.scanned += 1;
-        if summary.scanned % CANCEL_CHECK_EVERY == 0 && cancelled() {
-            summary.cancelled = true;
-            break;
-        }
-
-        let text: String = row.get(7).map_err(|e| e.to_string())?;
-        let Some((snippet, match_ranges)) = build_snippet(&text, &re) else {
-            continue;
-        };
-        emit(SearchHit {
-            session_path: row.get(0).map_err(|e| e.to_string())?,
-            project: row.get(1).map_err(|e| e.to_string())?,
-            ts: row.get(2).map_err(|e| e.to_string())?,
-            line_no: row.get(3).map_err(|e| e.to_string())?,
-            block_no: row.get(4).map_err(|e| e.to_string())?,
-            uuid: row.get(5).map_err(|e| e.to_string())?,
-            source: row.get(6).map_err(|e| e.to_string())?,
-            snippet,
-            match_ranges,
-        });
-        summary.hits += 1;
-        if let Some(max) = limit {
-            if summary.hits >= max {
-                summary.truncated = true;
+    let mut ranges = Vec::new();
+    for tok in tokens {
+        let mut search_from = win_start;
+        while let Some(rel) = lower[search_from..win_end.max(search_from)].find(tok.as_str()) {
+            let s = search_from + rel;
+            let e = s + tok.len();
+            if s < win_start || e > win_end {
                 break;
             }
+            let cs = base_chars + text[win_start..s].chars().count() as u32;
+            let ce = base_chars + text[win_start..e].chars().count() as u32;
+            ranges.push((cs, ce));
+            search_from = e;
         }
     }
+    ranges.sort_unstable();
 
-    Ok(summary)
-}
-
-/// Non-streaming convenience wrapper (collect all hits into a Vec). Used by
-/// tests and any caller that wants the whole result set at once.
-#[allow(dead_code)]
-pub fn search(
-    conn: &Connection,
-    query: &str,
-    opts: &SearchOpts,
-    filters: &SearchFilters,
-) -> Result<Vec<SearchHit>, String> {
-    if query.is_empty() {
-        return Ok(Vec::new());
-    }
-    let re = build_regex(query, opts)?;
-    let mut hits = Vec::new();
-    search_streaming(conn, &re, filters, None, |h| hits.push(h), || false)?;
-    Ok(hits)
+    Some((snippet, ranges))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::index::{open_index, SearchSchema};
+    use std::fs;
 
-    fn seed(conn: &Connection) {
-        super::super::db::init_schema(conn).unwrap();
-        conn.execute(
-            "INSERT INTO session_files (session_path, project, mtime, size, indexed_at)
-             VALUES ('/a.jsonl','~/app',100,1,0),('/b.jsonl','~/lib',200,1,0)",
-            [],
-        )
-        .unwrap();
-        let rows = [
-            ("/a.jsonl", "~/app", "user", "please fix the parser Bug today"),
-            ("/a.jsonl", "~/app", "assistant", "the bug is an off-by-one"),
-            ("/a.jsonl", "~/app", "thinking", "no relevant text here"),
-            ("/b.jsonl", "~/lib", "tool_use", "Read\nfile_path: /src/bug.rs"),
-        ];
-        for (i, (sp, proj, src, text)) in rows.iter().enumerate() {
-            conn.execute(
-                "INSERT INTO blocks (session_path, project, ts, line_no, block_no, uuid, source, text)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                rusqlite::params![sp, proj, 1000i64 + i as i64, i as i64, 0i64, "u", src, text],
-            )
-            .unwrap();
-        }
+    fn tmp_index(tag: &str) -> (Index, SearchSchema) {
+        let dir = std::env::temp_dir().join(format!("ccstudio_query_test_{tag}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let schema = SearchSchema::build();
+        let index = open_index(&dir, &schema.schema).unwrap();
+        (index, schema)
+    }
+
+    fn add_block(
+        writer: &tantivy::IndexWriter,
+        schema: &SearchSchema,
+        session_path: &str,
+        project: &str,
+        source: &str,
+        text: &str,
+    ) {
+        let mut doc = TantivyDocument::default();
+        doc.add_text(schema.session_path, session_path);
+        doc.add_text(schema.project, project);
+        doc.add_i64(schema.line_no, 0);
+        doc.add_i64(schema.block_no, 0);
+        doc.add_text(schema.uuid, "u1");
+        doc.add_text(schema.source, source);
+        let tool_name = if source == "tool_use" {
+            text.split('\n').next().unwrap_or("")
+        } else {
+            ""
+        };
+        doc.add_text(schema.tool_name, tool_name);
+        doc.add_text(schema.text, text);
+        writer.add_document(doc).unwrap();
     }
 
     #[test]
-    fn plain_is_case_insensitive_by_default() {
-        let conn = Connection::open_in_memory().unwrap();
-        seed(&conn);
-        let hits = search(&conn, "bug", &SearchOpts::default(), &SearchFilters::default()).unwrap();
-        // "Bug", "bug", "bug.rs" → 3 (thinking row has no "bug").
-        assert_eq!(hits.len(), 3);
-        // Recency order: /b.jsonl (mtime 200) first.
-        assert_eq!(hits[0].session_path, "/b.jsonl");
+    fn fuzzy_query_finds_typo_and_ranks_exact_above_it() {
+        let (index, schema) = tmp_index("fuzzy_rank");
+        let mut writer = index.writer(15_000_000).unwrap();
+        add_block(&writer, &schema, "/a.jsonl", "~/app", "user", "please fix the parser bug today");
+        add_block(&writer, &schema, "/b.jsonl", "~/app", "assistant", "the parsr looked fine to me");
+        writer.commit().unwrap();
+
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        let query = build_query(&index, &schema, "parser", &SearchFilters::default())
+            .unwrap()
+            .expect("non-empty query");
+        let (total, hits) = search_warm(&searcher, &schema, &query, 10).unwrap();
+
+        assert_eq!(total, 2, "exact + typo variant both match");
+        assert_eq!(hits.len(), 2);
+        // Exact match ("parser") must outrank the fuzzy typo match ("parsr").
+        assert!(hits[0].snippet.contains("parser"));
+        assert!(hits[0].score > hits[1].score);
     }
 
     #[test]
-    fn case_sensitive_toggle() {
-        let conn = Connection::open_in_memory().unwrap();
-        seed(&conn);
-        let opts = SearchOpts { case_sensitive: true, ..Default::default() };
-        let hits = search(&conn, "Bug", &opts, &SearchFilters::default()).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].snippet.contains("Bug"), true);
-    }
+    fn filters_narrow_by_source_and_project() {
+        let (index, schema) = tmp_index("filters");
+        let mut writer = index.writer(15_000_000).unwrap();
+        add_block(&writer, &schema, "/a.jsonl", "~/app", "user", "investigate the bug report");
+        add_block(&writer, &schema, "/a.jsonl", "~/app", "assistant", "found the bug cause");
+        add_block(&writer, &schema, "/b.jsonl", "~/lib", "user", "bug in the lib too");
+        writer.commit().unwrap();
 
-    #[test]
-    fn whole_word_toggle() {
-        // Whole-word excludes substrings inside larger words, but a boundary
-        // like "bug.rs" (`.` is a non-word char) still matches.
-        let re = build_regex("bug", &SearchOpts { whole_word: true, ..Default::default() })
-            .unwrap();
-        assert!(re.is_match("a bug here"));
-        assert!(re.is_match("path/bug.rs"));
-        assert!(!re.is_match("debugging"));
-        assert!(!re.is_match("bugs"));
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
 
-        // In the seed, "Bug", "bug" and "bug.rs" all match as whole words (3);
-        // the thinking row has no "bug".
-        let conn = Connection::open_in_memory().unwrap();
-        seed(&conn);
-        let opts = SearchOpts { whole_word: true, ..Default::default() };
-        let hits = search(&conn, "bug", &opts, &SearchFilters::default()).unwrap();
-        assert_eq!(hits.len(), 3);
-    }
-
-    #[test]
-    fn source_and_project_filters() {
-        let conn = Connection::open_in_memory().unwrap();
-        seed(&conn);
         let filters = SearchFilters {
             sources: vec!["assistant".into()],
             ..Default::default()
         };
-        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
-        assert_eq!(hits.len(), 1);
+        let query = build_query(&index, &schema, "bug", &filters).unwrap().unwrap();
+        let (total, hits) = search_warm(&searcher, &schema, &query, 10).unwrap();
+        assert_eq!(total, 1);
         assert_eq!(hits[0].source, "assistant");
 
         let filters = SearchFilters {
             projects: vec!["~/lib".into()],
             ..Default::default()
         };
-        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
-        assert_eq!(hits.len(), 1);
+        let query = build_query(&index, &schema, "bug", &filters).unwrap().unwrap();
+        let (total, hits) = search_warm(&searcher, &schema, &query, 10).unwrap();
+        assert_eq!(total, 1);
         assert_eq!(hits[0].project, "~/lib");
     }
 
     #[test]
-    fn tool_name_filter_matches_only_that_tool_use_block() {
-        let conn = Connection::open_in_memory().unwrap();
-        seed(&conn);
-        // Seed's only tool_use row is "Read\nfile_path: /src/bug.rs".
-        let filters = SearchFilters {
-            tool_name: Some("Read".into()),
-            ..Default::default()
-        };
-        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].source, "tool_use");
-
-        // A different tool name matches nothing, even though the text matches "bug".
-        let filters = SearchFilters {
-            tool_name: Some("Write".into()),
-            ..Default::default()
-        };
-        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
-        assert!(hits.is_empty());
+    fn empty_query_yields_no_query() {
+        let (index, schema) = tmp_index("empty");
+        assert!(build_query(&index, &schema, "   ", &SearchFilters::default())
+            .unwrap()
+            .is_none());
     }
 
     #[test]
-    fn tool_name_filter_overrides_sources() {
-        // A tool_name filter should narrow to that tool's tool_use blocks even
-        // when `sources` asks for something else entirely.
-        let conn = Connection::open_in_memory().unwrap();
-        seed(&conn);
-        let filters = SearchFilters {
-            sources: vec!["user".into()],
-            tool_name: Some("Read".into()),
-            ..Default::default()
-        };
-        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].source, "tool_use");
-    }
-
-    #[test]
-    fn session_path_filter_restricts_to_one_session() {
-        let conn = Connection::open_in_memory().unwrap();
-        seed(&conn);
-        let filters = SearchFilters {
-            session_path: Some("/a.jsonl".into()),
-            ..Default::default()
-        };
-        let hits = search(&conn, "bug", &SearchOpts::default(), &filters).unwrap();
-        assert_eq!(hits.len(), 2);
-        assert!(hits.iter().all(|h| h.session_path == "/a.jsonl"));
-    }
-
-    #[test]
-    fn snippet_ranges_point_at_the_match() {
-        let re = build_regex("bug", &SearchOpts::default()).unwrap();
-        let (snippet, ranges) = build_snippet("please fix the bug now", &re).unwrap();
-        assert_eq!(ranges.len(), 1);
-        let (s, e) = ranges[0];
-        let chars: Vec<char> = snippet.chars().collect();
-        let got: String = chars[s as usize..e as usize].iter().collect();
-        assert_eq!(got.to_lowercase(), "bug");
-    }
-
-    #[test]
-    fn bad_regex_is_an_error_not_a_panic() {
-        let opts = SearchOpts { regex: true, ..Default::default() };
-        assert!(build_regex("(unclosed", &opts).is_err());
-    }
-
-    /// Capstone: write a realistic multi-source session to disk, run the real
-    /// parallel indexer, then search it — extract → index → query as one flow.
-    #[test]
-    fn end_to_end_index_then_search() {
-        use std::path::Path;
-
-        let base = std::env::temp_dir().join("ccstudio_e2e_search");
-        let _ = std::fs::remove_dir_all(&base);
-        let proj = base.join("-home-user-app");
-        std::fs::create_dir_all(&proj).unwrap();
-        let jsonl = concat!(
-            r#"{"type":"user","uuid":"u1","timestamp":"2026-07-02T10:00:00.000Z","cwd":"/home/user/app","message":{"content":"please fix the parser bug"}}"#,
-            "\n",
-            r#"{"type":"assistant","uuid":"a1","timestamp":"2026-07-02T10:00:05.000Z","message":{"content":[{"type":"thinking","thinking":"analyze the parser structure"},{"type":"text","text":"reading parser"},{"type":"tool_use","name":"Read","input":{"file_path":"/home/user/app/src/parser.rs"}}]}}"#,
-            "\n",
-            r#"{"type":"user","uuid":"u2","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"off-by-one bug at line 42"}]}]}}"#,
-            "\n",
-        );
-        std::fs::write(proj.join("s.jsonl"), jsonl).unwrap();
-
-        let mut conn = Connection::open_in_memory().unwrap();
-        super::super::db::init_schema(&conn).unwrap();
-        super::super::index::build_index_parallel(&mut conn, &base, Some(Path::new("/home/user")))
-            .unwrap();
-
-        // "bug" (case-insensitive) → the user message + the tool_result.
-        let hits = search(&conn, "bug", &SearchOpts::default(), &SearchFilters::default()).unwrap();
-        assert_eq!(hits.len(), 2);
-        let sources: std::collections::HashSet<_> =
-            hits.iter().map(|h| h.source.as_str()).collect();
-        assert!(sources.contains("user") && sources.contains("tool_result"));
-        assert!(hits.iter().all(|h| !h.snippet.is_empty() && !h.match_ranges.is_empty()));
-
-        // "parser" restricted to thinking → the thinking block only, uuid preserved.
-        let f = SearchFilters { sources: vec!["thinking".into()], ..Default::default() };
-        let think = search(&conn, "parser", &SearchOpts::default(), &f).unwrap();
-        assert_eq!(think.len(), 1);
-        assert_eq!(think[0].source, "thinking");
-        assert_eq!(think[0].uuid, "a1");
-
-        // A file path inside a tool_use is searchable; project came from cwd.
-        let path_hits =
-            search(&conn, "parser.rs", &SearchOpts::default(), &SearchFilters::default()).unwrap();
-        assert_eq!(path_hits.len(), 1);
-        assert_eq!(path_hits[0].source, "tool_use");
-        assert_eq!(path_hits[0].project, "~/app");
-
-        let _ = std::fs::remove_dir_all(&base);
+    fn cold_match_requires_all_tokens_and_returns_snippet() {
+        let tokens = vec!["fix".to_string(), "parser".to_string()];
+        let (snippet, ranges) = cold_match("please fix the parser bug today", &tokens).unwrap();
+        assert!(snippet.contains("fix"));
+        assert!(snippet.contains("parser"));
+        assert_eq!(ranges.len(), 2);
+        assert!(cold_match("nothing relevant here", &tokens).is_none());
     }
 }

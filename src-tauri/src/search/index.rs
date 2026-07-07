@@ -1,9 +1,13 @@
-//! The indexer: walk session JSONLs, extract blocks, and populate the SQLite
-//! cache. Single-threaded for now (M3); parallelised in M5.
+//! The indexer: walk session JSONLs, extract blocks, and populate the tantivy
+//! full-text index (BM25 + fuzzy matching — see `query.rs`). The
+//! `session_files` SQLite table (mtime/size fingerprints) still lives
+//! alongside it for cheap invalidation, unchanged in spirit from before
+//! issue #5 — only the searchable-content store moved from a SQLite `blocks`
+//! table to a tantivy index.
 //!
-//! Each file is indexed as a delete-then-insert inside one transaction, keyed by
-//! its absolute path, with a `(mtime, size)` fingerprint recorded in
-//! `session_files` for later invalidation (M4).
+//! Each file is indexed as a delete-then-add against the tantivy writer, keyed
+//! by its `session_path` term, with a `(mtime, size)` fingerprint recorded in
+//! `session_files` for later invalidation.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -11,14 +15,75 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
+use tantivy::directory::MmapDirectory;
+use tantivy::schema::{Field, Schema, FAST, INDEXED, STORED, STRING, TEXT};
+use tantivy::{doc, Index, IndexWriter, TantivyDocument, Term};
 
-use super::extract::extract_blocks;
+use super::extract::{extract_blocks, ExtractedBlock};
+
+/// Heap budget handed to a tantivy `IndexWriter`. Generous enough for this
+/// app's ~1GB-max corpus without tuning; tantivy spills to disk as needed.
+pub const WRITER_HEAP_BYTES: usize = 50_000_000;
 
 /// Result of an index pass.
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct IndexStats {
     pub sessions: usize,
     pub blocks: usize,
+}
+
+/// The tantivy schema plus its field handles, so callers don't restring field
+/// names. One instance is built once at startup and shared by writer + reader.
+#[derive(Clone)]
+pub struct SearchSchema {
+    pub schema: Schema,
+    pub session_path: Field,
+    pub project: Field,
+    pub ts: Field,
+    pub line_no: Field,
+    pub block_no: Field,
+    pub uuid: Field,
+    pub source: Field,
+    /// First line of tool_use text (the tool's name), or "" for non-tool_use
+    /// blocks. A dedicated field so the `tool_name` filter is an exact-term
+    /// match instead of emulating a `LIKE 'name\n%'` prefix scan.
+    pub tool_name: Field,
+    pub text: Field,
+}
+
+impl SearchSchema {
+    pub fn build() -> Self {
+        let mut b = Schema::builder();
+        let session_path = b.add_text_field("session_path", STRING | STORED);
+        let project = b.add_text_field("project", STRING | STORED);
+        let ts = b.add_i64_field("ts", INDEXED | STORED | FAST);
+        let line_no = b.add_i64_field("line_no", STORED);
+        let block_no = b.add_i64_field("block_no", STORED);
+        let uuid = b.add_text_field("uuid", STRING | STORED);
+        let source = b.add_text_field("source", STRING | STORED);
+        let tool_name = b.add_text_field("tool_name", STRING | STORED);
+        let text = b.add_text_field("text", TEXT | STORED);
+        let schema = b.build();
+        Self {
+            schema,
+            session_path,
+            project,
+            ts,
+            line_no,
+            block_no,
+            uuid,
+            source,
+            tool_name,
+            text,
+        }
+    }
+}
+
+/// Open (creating if needed) the tantivy index at `dir` with the current
+/// [`SearchSchema`]. `dir` must already exist (see `db::tantivy_index_dir`).
+pub fn open_index(dir: &Path, schema: &Schema) -> Result<Index, String> {
+    let directory = MmapDirectory::open(dir).map_err(|e| e.to_string())?;
+    Index::open_or_create(directory, schema.clone()).map_err(|e| e.to_string())
 }
 
 fn unix_secs(t: SystemTime) -> i64 {
@@ -93,43 +158,9 @@ pub fn session_files(projects_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Read + extract one file for the cold search path, returning its
-/// `(project_label, blocks)` without touching the DB.
-pub fn extract_file(
-    path: &Path,
-    home: Option<&Path>,
-) -> Option<(String, Vec<super::extract::ExtractedBlock>)> {
+/// `(project_label, blocks)` without touching the index.
+pub fn extract_file(path: &Path, home: Option<&Path>) -> Option<(String, Vec<ExtractedBlock>)> {
     parse_file(path, home).map(|p| (p.project, p.blocks))
-}
-
-/// Index a single session file: delete its old rows, extract fresh blocks,
-/// bulk-insert them, and upsert its fingerprint — all in one transaction.
-/// Returns the number of blocks written. Used by the sweep and the eager hook.
-pub fn index_file(conn: &mut Connection, path: &Path, home: Option<&Path>) -> Result<usize, String> {
-    let payload =
-        parse_file(path, home).ok_or_else(|| format!("could not read {}", path.display()))?;
-    let n = payload.blocks.len();
-    let tx = conn.transaction().map_err(|e| e.to_string())?;
-    write_payload(&tx, &payload)?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(n)
-}
-
-/// Full single-threaded index of every session under the projects dir.
-/// (Kept as the simple reference path + test oracle; the app uses the parallel
-/// build.)
-#[allow(dead_code)]
-pub fn build_index(
-    conn: &mut Connection,
-    projects_dir: &Path,
-    home: Option<&Path>,
-) -> Result<IndexStats, String> {
-    let mut stats = IndexStats::default();
-    for path in session_files(projects_dir) {
-        let n = index_file(conn, &path, home)?;
-        stats.sessions += 1;
-        stats.blocks += n;
-    }
-    Ok(stats)
 }
 
 /// Everything one worker extracts from one file, handed to the writer thread.
@@ -138,12 +169,12 @@ struct FilePayload {
     project: String,
     mtime: i64,
     size: i64,
-    blocks: Vec<super::extract::ExtractedBlock>,
+    blocks: Vec<ExtractedBlock>,
 }
 
 /// Read + parse + extract one file into a [`FilePayload`]. Pure CPU/IO work with
-/// no DB access, so it's safe to run on many threads at once. `None` if the file
-/// can't be read.
+/// no DB/index access, so it's safe to run on many threads at once. `None` if
+/// the file can't be read.
 fn parse_file(path: &Path, home: Option<&Path>) -> Option<FilePayload> {
     let meta = fs::metadata(path).ok()?;
     let mtime = meta.modified().map(unix_secs).unwrap_or(0);
@@ -165,38 +196,48 @@ fn parse_file(path: &Path, home: Option<&Path>) -> Option<FilePayload> {
     })
 }
 
-/// Write one file's payload into the DB inside the given transaction
-/// (delete-then-insert + fingerprint upsert). Shared by the serial and parallel
-/// paths so the SQL lives in exactly one place.
-fn write_payload(tx: &rusqlite::Transaction, p: &FilePayload) -> Result<(), String> {
-    tx.execute(
-        "DELETE FROM blocks WHERE session_path = ?1",
-        [&p.session_path],
-    )
-    .map_err(|e| e.to_string())?;
-    {
-        let mut stmt = tx
-            .prepare_cached(
-                "INSERT INTO blocks
-                     (session_path, project, ts, line_no, block_no, uuid, source, text)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            )
-            .map_err(|e| e.to_string())?;
-        for b in &p.blocks {
-            stmt.execute(rusqlite::params![
-                p.session_path,
-                p.project,
-                b.ts,
-                b.line_no,
-                b.block_no,
-                b.uuid,
-                b.source,
-                b.text,
-            ])
-            .map_err(|e| e.to_string())?;
-        }
+/// First line of a tool_use block's text is the tool name (see `extract.rs`'s
+/// `"{name}\n{flattened input}"` shape); everything else has no tool name.
+fn tool_name_of<'a>(source: &str, text: &'a str) -> &'a str {
+    if source == "tool_use" {
+        text.split('\n').next().unwrap_or("")
+    } else {
+        ""
     }
-    tx.execute(
+}
+
+/// Stage one file's blocks into the tantivy writer (delete-then-add) and
+/// upsert its fingerprint in `session_files`. Does NOT commit either side —
+/// callers batch many files into one commit for throughput; see
+/// `build_index_parallel`/`sweep_index`. `index_file` (single-file path) does
+/// commit, since it's called standalone.
+fn stage_payload(
+    conn: &Connection,
+    writer: &IndexWriter,
+    schema: &SearchSchema,
+    p: &FilePayload,
+) -> Result<(), String> {
+    writer
+        .delete_term(Term::from_field_text(schema.session_path, &p.session_path));
+    for b in &p.blocks {
+        let tool_name = tool_name_of(&b.source, &b.text);
+        let mut document = TantivyDocument::default();
+        document.add_text(schema.session_path, &p.session_path);
+        document.add_text(schema.project, &p.project);
+        if let Some(ts) = b.ts {
+            document.add_i64(schema.ts, ts);
+        }
+        document.add_i64(schema.line_no, b.line_no);
+        document.add_i64(schema.block_no, b.block_no);
+        document.add_text(schema.uuid, &b.uuid);
+        document.add_text(schema.source, &b.source);
+        document.add_text(schema.tool_name, tool_name);
+        document.add_text(schema.text, &b.text);
+        writer
+            .add_document(document)
+            .map_err(|e| e.to_string())?;
+    }
+    conn.execute(
         "INSERT INTO session_files (session_path, project, mtime, size, indexed_at)
          VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(session_path)
@@ -213,15 +254,36 @@ fn write_payload(tx: &rusqlite::Transaction, p: &FilePayload) -> Result<(), Stri
     Ok(())
 }
 
+/// Index a single session file: delete its old docs, extract fresh blocks,
+/// add them, and upsert its fingerprint — committing both sides immediately
+/// (this is the eager after-Save path, not a batch). Returns the number of
+/// blocks written.
+pub fn index_file(
+    conn: &Connection,
+    writer: &mut IndexWriter,
+    schema: &SearchSchema,
+    path: &Path,
+    home: Option<&Path>,
+) -> Result<usize, String> {
+    let payload =
+        parse_file(path, home).ok_or_else(|| format!("could not read {}", path.display()))?;
+    let n = payload.blocks.len();
+    stage_payload(conn, writer, schema, &payload)?;
+    writer.commit().map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
 /// Parallel full index: **parse in parallel, write serialized.**
 ///
 /// A rayon pool fans the files across CPU cores (each worker parses one file and
 /// sends a [`FilePayload`] down an `mpsc` channel); a single writer thread — the
-/// only one allowed to touch the SQLite connection — drains the channel and does
-/// all inserts inside one big transaction. This is the canonical shape for
-/// SQLite, which permits just one writer at a time.
+/// only one allowed to touch the tantivy writer / sqlite connection — drains the
+/// channel and stages every payload, committing once at the end. Same shape as
+/// before issue #5, just writing into a tantivy index instead of SQLite rows.
 pub fn build_index_parallel(
     conn: &mut Connection,
+    writer: &mut IndexWriter,
+    schema: &SearchSchema,
     projects_dir: &Path,
     home: Option<&Path>,
 ) -> Result<IndexStats, String> {
@@ -232,23 +294,18 @@ pub fn build_index_parallel(
     let (sender, receiver) = mpsc::channel::<FilePayload>();
     let mut stats = IndexStats::default();
 
-    // A scoped thread lets the producers borrow `files`/`home` without `'static`.
     std::thread::scope(|scope| -> Result<(), String> {
-        // Producers: parse every file across the rayon pool, streaming results.
         scope.spawn(move || {
             files.par_iter().for_each_with(sender, |sender, path| {
                 if let Some(payload) = parse_file(path, home) {
-                    // Writer hung up (shouldn't happen mid-build) → drop quietly.
                     let _ = sender.send(payload);
                 }
             });
-            // All sender clones drop here, closing the channel.
         });
 
-        // Consumer: the sole DB writer, one transaction for the whole build.
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         for payload in &receiver {
-            write_payload(&tx, &payload)?;
+            stage_payload(&tx, writer, schema, &payload)?;
             stats.sessions += 1;
             stats.blocks += payload.blocks.len();
         }
@@ -256,6 +313,7 @@ pub fn build_index_parallel(
         Ok(())
     })?;
 
+    writer.commit().map_err(|e| e.to_string())?;
     Ok(stats)
 }
 
@@ -270,11 +328,17 @@ pub struct SweepStats {
     pub unchanged: usize,
 }
 
-/// Drop every cached row for a session path. Used both on deletion cleanup and
-/// as the eager "this file changed" hook after our own Save/Restore.
-pub fn remove_from_index(conn: &Connection, session_path: &str) -> Result<(), String> {
-    conn.execute("DELETE FROM blocks WHERE session_path = ?1", [session_path])
-        .map_err(|e| e.to_string())?;
+/// Drop every indexed doc + fingerprint for a session path. Used both on
+/// deletion cleanup and as the eager "this file changed" hook after our own
+/// Save/Restore. Commits immediately (standalone call, not part of a batch).
+pub fn remove_from_index(
+    conn: &Connection,
+    writer: &mut IndexWriter,
+    schema: &SearchSchema,
+    session_path: &str,
+) -> Result<(), String> {
+    writer.delete_term(Term::from_field_text(schema.session_path, session_path));
+    writer.commit().map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM session_files WHERE session_path = ?1",
         [session_path],
@@ -285,7 +349,6 @@ pub fn remove_from_index(conn: &Connection, session_path: &str) -> Result<(), St
 
 /// Read every cached fingerprint into memory for cheap comparison.
 fn db_fingerprints(conn: &Connection) -> Result<HashMap<String, (i64, i64)>, String> {
-    let mut map = HashMap::new();
     let mut stmt = conn
         .prepare("SELECT session_path, mtime, size FROM session_files")
         .map_err(|e| e.to_string())?;
@@ -294,54 +357,75 @@ fn db_fingerprints(conn: &Connection) -> Result<HashMap<String, (i64, i64)>, Str
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
         })
         .map_err(|e| e.to_string())?;
+    let mut out = HashMap::new();
     for row in rows {
         let (p, m, s) = row.map_err(|e| e.to_string())?;
-        map.insert(p, (m, s));
+        out.insert(p, (m, s));
     }
-    Ok(map)
+    Ok(out)
 }
 
 /// Incremental refresh: reindex new/changed files (by `(mtime, size)`), remove
-/// rows for files that no longer exist, leave unchanged files untouched. This
+/// docs for files that no longer exist, leave unchanged files untouched. This
 /// is the lazy background sweep and catches external changes (the CLI appending
-/// to a session, edits made outside the app).
+/// to a session, edits made outside the app), plus the one-time full rebuild
+/// forced by `db::ensure_engine_version` after an engine upgrade (every file
+/// looks "new" once `session_files` has been cleared).
 pub fn sweep_index(
     conn: &mut Connection,
+    writer: &mut IndexWriter,
+    schema: &SearchSchema,
     projects_dir: &Path,
     home: Option<&Path>,
 ) -> Result<SweepStats, String> {
     let db_fp = db_fingerprints(conn)?;
     let mut stats = SweepStats::default();
     let mut seen: HashSet<String> = HashSet::new();
+    let mut wrote_any = false;
 
-    for path in session_files(projects_dir) {
-        let sp = path.to_string_lossy().to_string();
-        seen.insert(sp.clone());
+    {
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        for path in session_files(projects_dir) {
+            let sp = path.to_string_lossy().to_string();
+            seen.insert(sp.clone());
 
-        let Ok(meta) = fs::metadata(&path) else {
-            continue;
-        };
-        let mtime = meta.modified().map(unix_secs).unwrap_or(0);
-        let size = meta.len() as i64;
+            let Ok(meta) = fs::metadata(&path) else {
+                continue;
+            };
+            let mtime = meta.modified().map(unix_secs).unwrap_or(0);
+            let size = meta.len() as i64;
 
-        match db_fp.get(&sp) {
-            Some(&(m, s)) if m == mtime && s == size => stats.unchanged += 1,
-            _ => {
-                index_file(conn, &path, home)?;
-                stats.reindexed += 1;
+            match db_fp.get(&sp) {
+                Some(&(m, s)) if m == mtime && s == size => stats.unchanged += 1,
+                _ => {
+                    if let Some(payload) = parse_file(&path, home) {
+                        stage_payload(&tx, writer, schema, &payload)?;
+                        wrote_any = true;
+                    }
+                    stats.reindexed += 1;
+                }
             }
         }
+
+        // Anything in the cache but no longer on disk is stale — drop it.
+        let stale: Vec<String> = db_fp
+            .keys()
+            .filter(|p| !seen.contains(*p))
+            .cloned()
+            .collect();
+        for p in &stale {
+            writer.delete_term(Term::from_field_text(schema.session_path, p));
+            tx.execute("DELETE FROM session_files WHERE session_path = ?1", [p])
+                .map_err(|e| e.to_string())?;
+            wrote_any = true;
+        }
+        stats.deleted = stale.len();
+
+        tx.commit().map_err(|e| e.to_string())?;
     }
 
-    // Anything in the cache but no longer on disk is stale — drop it.
-    let stale: Vec<String> = db_fp
-        .keys()
-        .filter(|p| !seen.contains(*p))
-        .cloned()
-        .collect();
-    for p in stale {
-        remove_from_index(conn, &p)?;
-        stats.deleted += 1;
+    if wrote_any {
+        writer.commit().map_err(|e| e.to_string())?;
     }
 
     Ok(stats)
@@ -368,28 +452,39 @@ mod tests {
         base
     }
 
+    /// A throwaway tantivy index + writer for one test, plus the sqlite conn.
+    fn tmp_engine(tag: &str) -> (Connection, Index, IndexWriter, SearchSchema) {
+        let dir = std::env::temp_dir().join(format!("ccstudio_idx_tantivy_{tag}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let schema = SearchSchema::build();
+        let index = open_index(&dir, &schema.schema).unwrap();
+        let writer = index.writer(WRITER_HEAP_BYTES).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        super::super::db::init_schema(&conn).unwrap();
+        (conn, index, writer, schema)
+    }
+
+    fn doc_count(index: &Index) -> usize {
+        let reader = index.reader().unwrap();
+        reader.searcher().num_docs() as usize
+    }
+
     #[test]
     fn indexes_a_dir_and_counts() {
         let base = tmp_projects("count");
         let home = Path::new("/home/user");
-        let mut conn = Connection::open_in_memory().unwrap();
-        super::super::db::init_schema(&conn).unwrap();
+        let (mut conn, index, mut writer, schema) = tmp_engine("count");
 
-        let stats = build_index(&mut conn, &base, Some(home)).unwrap();
+        let stats = build_index_parallel(&mut conn, &mut writer, &schema, &base, Some(home)).unwrap();
         assert_eq!(stats.sessions, 1);
         assert_eq!(stats.blocks, 3); // user text + assistant text + tool_use
+        assert_eq!(doc_count(&index), 3);
 
-        // Fingerprint row exists.
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM session_files", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
-
-        // Project label came from cwd, home-relativised.
-        let project: String = conn
-            .query_row("SELECT project FROM blocks LIMIT 1", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(project, "~/app");
 
         let _ = fs::remove_dir_all(&base);
     }
@@ -398,12 +493,11 @@ mod tests {
     fn sweep_detects_change_add_and_deletion() {
         let base = tmp_projects("sweep");
         let proj = base.join("-home-user-app");
-        let mut conn = Connection::open_in_memory().unwrap();
-        super::super::db::init_schema(&conn).unwrap();
-        build_index(&mut conn, &base, None).unwrap();
+        let (mut conn, _index, mut writer, schema) = tmp_engine("sweep");
+        build_index_parallel(&mut conn, &mut writer, &schema, &base, None).unwrap();
 
         // No changes → nothing reindexed.
-        let s = sweep_index(&mut conn, &base, None).unwrap();
+        let s = sweep_index(&mut conn, &mut writer, &schema, &base, None).unwrap();
         assert_eq!((s.reindexed, s.deleted, s.unchanged), (0, 0, 1));
 
         // Grow the file (size changes) → reindexed.
@@ -412,60 +506,18 @@ mod tests {
             r#"{"type":"user","uuid":"u2","message":{"content":"another line"}}"#
         );
         fs::write(proj.join("sess1.jsonl"), &bigger).unwrap();
-        let s = sweep_index(&mut conn, &base, None).unwrap();
+        let s = sweep_index(&mut conn, &mut writer, &schema, &base, None).unwrap();
         assert_eq!(s.reindexed, 1);
 
         // Add a second session → the new one is reindexed, the old is unchanged.
         fs::write(proj.join("sess2.jsonl"), FIXTURE).unwrap();
-        let s = sweep_index(&mut conn, &base, None).unwrap();
+        let s = sweep_index(&mut conn, &mut writer, &schema, &base, None).unwrap();
         assert_eq!((s.reindexed, s.unchanged), (1, 1));
 
-        // Delete it → its rows are removed.
+        // Delete it → its docs are removed.
         fs::remove_file(proj.join("sess2.jsonl")).unwrap();
-        let s = sweep_index(&mut conn, &base, None).unwrap();
+        let s = sweep_index(&mut conn, &mut writer, &schema, &base, None).unwrap();
         assert_eq!(s.deleted, 1);
-        let sess2_blocks: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM blocks WHERE session_path LIKE '%sess2.jsonl'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(sess2_blocks, 0);
-
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn parallel_matches_serial() {
-        // Several sessions across two projects.
-        let base = std::env::temp_dir().join("ccstudio_idx_par");
-        let _ = fs::remove_dir_all(&base);
-        for proj in ["-home-user-app", "-home-user-lib"] {
-            let dir = base.join(proj);
-            fs::create_dir_all(&dir).unwrap();
-            for i in 0..3 {
-                fs::write(dir.join(format!("s{i}.jsonl")), FIXTURE).unwrap();
-            }
-        }
-
-        let mut serial = Connection::open_in_memory().unwrap();
-        super::super::db::init_schema(&serial).unwrap();
-        let s_serial = build_index(&mut serial, &base, None).unwrap();
-
-        let mut par = Connection::open_in_memory().unwrap();
-        super::super::db::init_schema(&par).unwrap();
-        let s_par = build_index_parallel(&mut par, &base, None).unwrap();
-
-        assert_eq!(s_serial.sessions, 6);
-        assert_eq!(s_par.sessions, s_serial.sessions);
-        assert_eq!(s_par.blocks, s_serial.blocks);
-
-        // Same number of rows landed in the DB either way.
-        let count = |c: &Connection| -> i64 {
-            c.query_row("SELECT COUNT(*) FROM blocks", [], |r| r.get(0)).unwrap()
-        };
-        assert_eq!(count(&par), count(&serial));
 
         let _ = fs::remove_dir_all(&base);
     }
@@ -473,16 +525,12 @@ mod tests {
     #[test]
     fn reindex_is_idempotent() {
         let base = tmp_projects("idem");
-        let mut conn = Connection::open_in_memory().unwrap();
-        super::super::db::init_schema(&conn).unwrap();
+        let (mut conn, index, mut writer, schema) = tmp_engine("idem");
 
-        build_index(&mut conn, &base, None).unwrap();
-        build_index(&mut conn, &base, None).unwrap(); // second pass must not duplicate
+        build_index_parallel(&mut conn, &mut writer, &schema, &base, None).unwrap();
+        build_index_parallel(&mut conn, &mut writer, &schema, &base, None).unwrap(); // second pass must not duplicate
 
-        let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM blocks", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 3, "delete-then-insert must not double rows");
+        assert_eq!(doc_count(&index), 3, "delete-then-add must not double docs");
 
         let _ = fs::remove_dir_all(&base);
     }

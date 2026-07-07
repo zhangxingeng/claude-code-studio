@@ -34,8 +34,9 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "alloc"] }
 # Parallel parse fan-out for the indexer (parse in parallel, write serialized).
 rayon = "1"
-# The matcher. Same SIMD literal-prefiltering that makes ripgrep fast — this is
-# what makes the "scan text, no tokenizer" approach viable.
-regex = "1"
+# The matcher: an embedded full-text index (BM25 ranking + fuzzy/typo-tolerant
+# term matching) — replaces the old regex-crate substring/regex scan (issue #5:
+# fuzzy/intent search over exact-match precision tooling).
+tantivy = "0.26"
 # Session-fork ids for "resume from here" (v4, randomly generated).
 uuid = { version = "1", features = ["v4"] }

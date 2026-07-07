@@ -23,7 +23,7 @@ that follows it.**
 
 ---
 
-## v2 — Fuzzy/intent search redesign (design decision, 2026-07-06 — not yet built, tracked as issue #5)
+## v2 — Fuzzy/intent search redesign (backend BUILT 2026-07-07, tracked as issue #5)
 
 Founder direction: drop exact/regex matching entirely. This tool's job is finding relevant fragments
 in a large pile of information-sparse chat history — that's an intent/fuzzy-match problem, not a
@@ -55,9 +55,51 @@ VS-Code-style *exact* search (§2 below), but that's the wrong tool for this job
   relevance ranking. This is an intentional upgrade, not a side effect to minimize — recency ordering
   was a proxy for relevance in the absence of real ranking.
 
-**Known engineering risk to spike early**: tantivy's fuzzy hits currently score on par with exact hits
-(open upstream issue) — will likely need a small custom scorer/boost so exact matches still rank above
-fuzzy ones.
+**Known engineering risk — resolved as built**: tantivy's fuzzy hits score on par with exact hits by
+default (open upstream issue). Fixed with a boosted union query, built per query token in
+`query.rs::build_query`: `Should(BoostQuery(TermQuery(token), boost=3.0), FuzzyTermQuery(token,
+distance=1, transposition=true))`, then every token's group is itself OR'd (`Should`) together and
+wrapped in a top-level `BooleanQuery` `Must` alongside the filter clauses (source/tool-name/project as
+`Should`-groups, `ts` as a `RangeQuery`, `session_path` as an exact `TermQuery`). The boost keeps
+exact/near-exact term hits ranked above loosely-fuzzy ones per token, while more matched tokens still
+accumulate more BM25 score than fewer — both properties covered by
+`query::tests::fuzzy_query_finds_typo_and_ranks_exact_above_it`.
+
+**Schema (as built)**: `session_path`/`project`/`uuid`/`source` are `STRING | STORED` (single indexed
+term, exact-match filterable); `text` is `TEXT | STORED` (tokenized, the fuzzy-matched field); `ts` is
+`INDEXED | STORED | FAST`; `line_no`/`block_no` are `STORED` only. A `tool_name` field (`STRING |
+STORED`, the first line of a `tool_use` block's text, `""` otherwise) was added so the tool-name filter
+is an exact `TermQuery` instead of emulating the old `LIKE 'name\n%'` prefix scan.
+
+**Migration (as built, not in the original v2 note above — a real gap this build closed)**: this app
+already ships to users with a populated v1 (`blocks` SQLite table + regex scan) cache on disk. Silently
+swapping the matcher would leave their `session_files` fingerprints pointing at files the *new* tantivy
+index has never seen, and the invalidation sweep would treat those fingerprints as "already indexed" and
+skip re-extraction — users would upgrade into an empty search index with nothing to trigger a rebuild.
+Fixed with an `ENGINE_VERSION` marker (`db.rs`) in a new `search_meta` key/value table: on mismatch (or
+on a fresh v1 install with no marker at all), `db::ensure_engine_version` drops the legacy `blocks`
+table, clears every `session_files` fingerprint, and wipes the tantivy index directory — forcing exactly
+one full rebuild into the fresh engine on next launch. A no-op once the marker matches. Simple-and-total
+was chosen deliberately over incremental migration logic, since this cache was always documented as a
+disposable, fully-rebuildable-from-source-JSONL artifact.
+
+**Cold-tier compromise (as built)**: the cold tier (session files not yet reflected in the tantivy
+index — first launch, or right after an engine-version rebuild) does **not** build a throwaway tantivy
+index per uncached file. It falls back to a simpler case-insensitive substring match requiring every
+query token present (`query::cold_match`) over freshly-extracted blocks, reusing the old windowed-
+snippet/char-boundary logic. This is a deliberately narrower guarantee than the warm tier's fuzzy
+ranking — acceptable because the cold tier is normally empty (the background indexer catches up fast)
+and only a stand-in for "correctness never waits on the index," not a second full matching engine.
+
+**Frontend contract (as built)**: the `search` Tauri command drops the `opts` parameter entirely (no
+`SearchOpts`, no case/whole-word/regex fields anywhere in the Rust API) — not a geek-mode toggle, just
+gone, matching the frontend directive above. `SearchHit` gained a `score: f32` field (BM25 + boost,
+descending) alongside its existing fields. `SearchSummary.scanned` was relabeled from "SQL rows scanned"
+to "total matching blocks found before the result-limit truncation" (via a `Count` collector run
+alongside `TopDocs`) — same field name, an evolved meaning that fits the new engine. A `limit` is now
+always applied (`DEFAULT_LIMIT = 500` when the caller passes `None`), since tantivy's `TopDocs` collector
+needs a concrete top-k rather than the old unbounded regex-scan-and-emit; the frontend already paginates
+in pages of 100, so this was never actually surfaced as unlimited.
 
 **Shared-engine question (prompt library, issue #7)**: prompt-library search has a different tradeoff
 profile (small volume, quality/intent over performance) and is **not** sharing this tantivy engine —
