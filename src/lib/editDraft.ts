@@ -5,7 +5,18 @@
  * Plain edit-in-place model: each row holds its original line and its current
  * (possibly edited) value. There is no version history, no reorder, and no
  * delete/restore — "edit a message, Save writes to disk" is the whole surface.
+ *
+ * Uses `lossless-json` instead of native `JSON.parse`/`JSON.stringify` for
+ * every read/mutate/write of a line. Native JSON silently rounds any integer
+ * past 2^53 to the nearest representable double — parsing a line, editing an
+ * unrelated field, and re-stringifying it would silently corrupt any large
+ * numeric field elsewhere on that same line (confirmed empirically by
+ * `tests/edit_roundtrip_smoke.mjs`, which is exactly how this was found).
+ * `lossless-json` keeps every untouched number byte-for-byte as originally
+ * written; only fields we explicitly set go through normal JS serialization.
  */
+
+import { parse as losslessParse, stringify as losslessStringify, isLosslessNumber } from 'lossless-json';
 
 export const MESSAGE_ROLES = ['user', 'assistant'];
 
@@ -28,18 +39,34 @@ export interface Draft {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+/** Parses one line losslessly; `null` for anything that isn't a JSON object
+ * (invalid JSON, a bare scalar, or a bare top-level number/array). Rejects
+ * duplicate keys (lossless-json's parser errors on them) rather than
+ * silently taking the last one, same as native JSON would. */
 function parseLine(text: string): Record<string, unknown> | null {
   try {
-    const obj = JSON.parse(text);
-    if (typeof obj === 'object' && obj !== null) return obj as Record<string, unknown>;
+    const obj = losslessParse(text);
+    if (typeof obj === 'object' && obj !== null && !isLosslessNumber(obj) && !Array.isArray(obj)) {
+      return obj as Record<string, unknown>;
+    }
     return null;
   } catch {
     return null;
   }
 }
 
+/** `losslessStringify` types its return as `string | undefined` (mirroring
+ * native `JSON.stringify`, which returns `undefined` for `undefined`/
+ * functions/symbols) — never happens for the plain object/array line values
+ * this module stringifies, so this narrows that away at one call site. */
+function stringifyLine(value: unknown): string {
+  const out = losslessStringify(value);
+  if (out === undefined) throw new Error('unstringifiable line value');
+  return out;
+}
+
 function deepClone<T>(val: T): T {
-  return JSON.parse(JSON.stringify(val)) as T;
+  return losslessParse(stringifyLine(val)) as T;
 }
 
 // ── buildDraft ─────────────────────────────────────────────────────────────────
@@ -61,8 +88,14 @@ export function buildDraft(rawText: string, sessionPath: string, createdAt: numb
     const obj = parseLine(line);
     const uuid = obj !== null && typeof obj['uuid'] === 'string' ? (obj['uuid'] as string) : null;
     const type = obj !== null && typeof obj['type'] === 'string' ? (obj['type'] as string) : '';
-    // Key rule: use uuid if present and parses, else `idx:<originalIndex>`
-    const key = uuid !== null ? uuid : `idx:${originalIndex}`;
+    // Key rule: use uuid if present, parses, AND hasn't already been claimed
+    // by an earlier line — else `idx:<originalIndex>`. Real session files are
+    // expected to have unique uuids, but this draft's bookkeeping must stay
+    // injective (exactly one row per line, never merged) even if that
+    // assumption is ever violated by a duplicate/forked/corrupt file — a
+    // naive `uuid ?? idx` key rule silently collapses two lines into one row
+    // keyed by uuid, dropping the earlier line's content on save.
+    const key = uuid !== null && !(uuid in rows) ? uuid : `idx:${originalIndex}`;
 
     rows[key] = { originalIndex, type, uuid, original: line, value: line };
     order.push(key);
@@ -139,7 +172,7 @@ export function applyBlockTextEdit(
     return d;
   }
 
-  const newValue = JSON.stringify(cloned);
+  const newValue = stringifyLine(cloned);
   if (newValue === row.value) return d;
   return { ...d, rows: { ...d.rows, [key]: { ...row, value: newValue } } };
 }
@@ -163,7 +196,7 @@ export function applyRoleEdit(d: Draft, key: string, role: string): Draft {
   const msg = cloned['message'] as Record<string, unknown> | undefined;
   if (msg) msg['role'] = role;
 
-  const newValue = JSON.stringify(cloned);
+  const newValue = stringifyLine(cloned);
   if (newValue === row.value) return d;
   return { ...d, rows: { ...d.rows, [key]: { ...row, value: newValue, type: role } } };
 }
@@ -182,12 +215,12 @@ export function applyRawEdit(d: Draft, key: string, newRawLine: string): Draft {
   const row = d.rows[key];
   if (!row) return d;
 
-  const parsed = JSON.parse(newRawLine); // throws on invalid JSON — caller catches
-  if (typeof parsed !== 'object' || parsed === null) {
+  const parsed = losslessParse(newRawLine); // throws on invalid JSON — caller catches
+  if (typeof parsed !== 'object' || parsed === null || isLosslessNumber(parsed)) {
     throw new Error('Top-level JSON must be an object or array.');
   }
 
-  const normalized = JSON.stringify(parsed);
+  const normalized = stringifyLine(parsed);
   const obj = Array.isArray(parsed) ? null : (parsed as Record<string, unknown>);
   const newUuid = obj && typeof obj['uuid'] === 'string' ? (obj['uuid'] as string) : row.uuid;
   const newType = obj && typeof obj['type'] === 'string' ? (obj['type'] as string) : row.type;
