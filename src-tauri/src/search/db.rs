@@ -6,6 +6,7 @@
 //! for invalidation) and `search_meta` (the engine-version marker used to
 //! force a one-time full rebuild when the on-disk engine changes shape).
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -70,16 +71,63 @@ fn index_root() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Where the cross-process migration lock lives: a dotfile next to
+/// `tantivy_dir` (its *parent*, not inside it — `tantivy_dir` itself gets
+/// `remove_dir_all`'d during a reset, and deleting a file out from under an
+/// open handle mid-lock is asking for trouble, especially on Windows).
+/// Named after `tantivy_dir`'s own basename so tests using distinct tagged
+/// temp dirs (see `tmp_dir` below) don't contend with each other.
+fn migration_lock_path(tantivy_dir: &Path) -> PathBuf {
+    let name = tantivy_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let parent = tantivy_dir.parent().unwrap_or(tantivy_dir);
+    parent.join(format!(".{name}.migration.lock"))
+}
+
+/// Block until we hold the exclusive cross-process migration lock. Released
+/// automatically when the returned `File` is dropped (i.e. at the end of
+/// [`ensure_engine_version`]'s call frame).
+fn acquire_migration_lock(tantivy_dir: &Path) -> Result<File, String> {
+    let path = migration_lock_path(tantivy_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    // `File::lock` (std, stabilized 1.89) blocks until it holds an exclusive
+    // advisory lock (flock on Unix, LockFileEx on Windows); released when
+    // `file` is dropped.
+    file.lock().map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
 /// Reset `session_files` and wipe the tantivy index directory when the
 /// on-disk engine version doesn't match `effective_version` (see
 /// [`ENGINE_VERSION`] for how the caller composes it) — forcing exactly one
 /// full rebuild into the current engine. A no-op once the version matches, so
 /// this is safe to call on every startup.
+///
+/// Guarded by a cross-process file lock (issue #12): two app instances
+/// launching at once (most likely right after an upgrade, when every
+/// instance sees a stale version) used to race the version check against
+/// each other — one instance's fingerprint clear could land after another had
+/// already started repopulating them, and the two `remove_dir_all`/
+/// `create_dir_all` pairs against the same tantivy directory could interleave.
+/// Now the whole check-and-reset runs under an exclusive lock; a second
+/// instance blocks until the first finishes, then re-checks the version
+/// (already current) and takes the no-op path instead of racing the wipe.
 pub fn ensure_engine_version(
     conn: &Connection,
     tantivy_dir: &Path,
     effective_version: &str,
 ) -> Result<(), String> {
+    let _lock = acquire_migration_lock(tantivy_dir)?;
+
     let current: Option<String> = conn
         .query_row(
             "SELECT value FROM search_meta WHERE key = 'engine_version'",
@@ -222,6 +270,54 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM session_files", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "matching version must not reset fingerprints again");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression test for issue #12: two "processes" (here, two independently
+    /// opened `File` handles on the same lock path, which is exactly what two
+    /// separate OS processes would each hold) racing for the migration lock
+    /// must serialize, not interleave. The waiter must not acquire the lock
+    /// until the holder has released it.
+    #[test]
+    fn migration_lock_serializes_concurrent_processes() {
+        let dir = tmp_dir("lock");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let holder_dir = dir.clone();
+        let holder_order = order.clone();
+        let holder = std::thread::spawn(move || {
+            let _lock = acquire_migration_lock(&holder_dir).expect("holder acquires lock");
+            holder_order.lock().unwrap().push("holder-acquired");
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            holder_order.lock().unwrap().push("holder-released");
+            // `_lock` drops here, releasing the flock.
+        });
+
+        // Give the holder a head start so it wins the race for the lock.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+
+        let waiter_dir = dir.clone();
+        let waiter_order = order.clone();
+        let waiter = std::thread::spawn(move || {
+            let _lock = acquire_migration_lock(&waiter_dir).expect("waiter acquires lock");
+            waiter_order.lock().unwrap().push("waiter-acquired");
+        });
+
+        holder.join().unwrap();
+        waiter.join().unwrap();
+
+        let order = order.lock().unwrap();
+        let released_idx = order.iter().position(|e| *e == "holder-released").unwrap();
+        let waiter_idx = order.iter().position(|e| *e == "waiter-acquired").unwrap();
+        assert!(
+            waiter_idx > released_idx,
+            "waiter must not acquire the lock until the holder releases it: {:?}",
+            *order
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
