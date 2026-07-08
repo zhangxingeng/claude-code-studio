@@ -4,8 +4,18 @@
  */
 
 export interface ContentBlock {
-  blockType: 'text';
+  blockType: 'thinking' | 'text' | 'tool_use' | 'tool_result';
+  // text / thinking
   text?: string;
+  thinking?: string;
+  signature?: string;
+  // tool_use fields
+  toolName?: string;
+  toolId?: string;
+  toolInput?: Record<string, unknown>;
+  // tool_result fields (matched in from global registry)
+  toolOutput?: string;
+  isError?: boolean;
 }
 
 export interface Entry {
