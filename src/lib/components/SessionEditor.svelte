@@ -5,12 +5,11 @@
    * This component is the orchestrator: it owns the byte-faithful edit Draft
    * and the save/discard/restore-backup/exit flows, and turns the draft into a
    * display model (one chat bubble per renderable row). All rendering lives in
-   * focused children: SessionMetaCard · MessageCell · SaveRail · RawJsonModal
+   * focused children: SessionMetaCard · MessageCell · SaveRail
    *
    * Safety model (JSON-safe by construction):
    *   - The edit model owns every line; the UI only ever edits a message
-   *     *string* (per text block), the speaker, or a re-validated raw JSON
-   *     line. Users can't hand-corrupt the structure.
+   *     *string* (per text block). Users can't hand-corrupt the structure.
    *   - "Save" snapshots a single-slot backup before overwriting the original
    *     file. There is no crash-safe autosave draft and no version history —
    *     edit in place, then Save writes straight to disk.
@@ -41,8 +40,6 @@
     serializeDraft,
     isDirty,
     applyBlockTextEdit,
-    applyRoleEdit,
-    applyRawEdit,
     extractSessionInfo,
   } from '$lib/editDraft';
   import type { Draft, DraftRow } from '$lib/editDraft';
@@ -50,7 +47,6 @@
   import SessionMetaCard from './SessionMetaCard.svelte';
   import MessageCell from './MessageCell.svelte';
   import SaveRail from './SaveRail.svelte';
-  import RawJsonModal from './RawJsonModal.svelte';
   import InlineSearchPanel from './InlineSearchPanel.svelte';
 
   // ── Props ──────────────────────────────────────────────────────────────────
@@ -73,10 +69,6 @@
   let rawText = $state('');
   let loading = $state(true);
   let loadError = $state<string | null>(null);
-
-  // Raw JSON escape hatch
-  let rawEditKey = $state<string | null>(null);
-  let rawEditInitial = $state('');
 
   // Windowing — cap rendered display items so huge sessions stay responsive.
   let visibleCount = $state(300);
@@ -212,7 +204,6 @@
   // requestExit above is the only path that leaves the editor).
   onMount(() => {
     function closeTopModal(): boolean {
-      if (rawEditKey !== null) { rawEditKey = null; return true; }
       if (titleRenameConfirming) { titleRenameConfirming = false; return true; }
       if (showRestoreModal) { showRestoreModal = false; restoreCandidate = null; return true; }
       if (showDiscardModal) { showDiscardModal = false; return true; }
@@ -234,7 +225,7 @@
         if (
           !draft || !dirty ||
           showSaveModal || showDiscardModal || showExitModal || showRestoreModal ||
-          rawEditKey !== null || renamingTitle
+          renamingTitle
         ) {
           return;
         }
@@ -279,9 +270,6 @@
   function doBlockEdit(key: string, ordinal: number, text: string) {
     if (draft) mutate(applyBlockTextEdit(draft, key, ordinal, text));
   }
-  function doRole(key: string, role: string) {
-    if (draft) mutate(applyRoleEdit(draft, key, role));
-  }
   async function doResumeFrom(key: string) {
     if (!draft) return;
     const row = draft.rows[key];
@@ -298,31 +286,6 @@
       }
     } catch (e) {
       showToast(`Fork failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  // ── Raw JSON escape hatch ───────────────────────────────────────────────────
-  function openRawEdit(key: string) {
-    if (!draft) return;
-    const row = draft.rows[key];
-    if (!row) return;
-    // Pretty-print for editing; applyRawEdit re-collapses to one line on save.
-    try {
-      rawEditInitial = JSON.stringify(JSON.parse(row.value), null, 2);
-    } catch {
-      rawEditInitial = row.value;
-    }
-    rawEditKey = key;
-  }
-  // Returns an error string to show in the modal, or null on success (closes it).
-  function applyRaw(text: string): string | null {
-    if (rawEditKey === null || !draft) return 'No line selected.';
-    try {
-      mutate(applyRawEdit(draft, rawEditKey, text));
-      rawEditKey = null;
-      return null;
-    } catch (e) {
-      return e instanceof Error ? e.message : 'Invalid JSON.';
     }
   }
 
@@ -553,8 +516,6 @@
             row={rr.row}
             entry={rr.entry}
             onBlockEdit={(o, t) => doBlockEdit(item.key, o, t)}
-            onRole={(role) => doRole(item.key, role)}
-            onRaw={() => openRawEdit(item.key)}
             onResumeFrom={() => doResumeFrom(item.key)}
           />
         {/if}
@@ -607,11 +568,6 @@
       </div>
     </div>
   </div>
-{/if}
-
-<!-- ── Raw JSON editor modal ─────────────────────────────────────────────────── -->
-{#if rawEditKey}
-  <RawJsonModal initial={rawEditInitial} onApply={applyRaw} onCancel={() => (rawEditKey = null)} />
 {/if}
 
 <!-- ── Save (overwrite original) modal ───────────────────────────────────────── -->

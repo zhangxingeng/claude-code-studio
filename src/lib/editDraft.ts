@@ -18,8 +18,6 @@
 
 import { parse as losslessParse, stringify as losslessStringify, isLosslessNumber } from 'lossless-json';
 
-export const MESSAGE_ROLES = ['user', 'assistant'];
-
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface DraftRow {
@@ -175,61 +173,6 @@ export function applyBlockTextEdit(
   const newValue = stringifyLine(cloned);
   if (newValue === row.value) return d;
   return { ...d, rows: { ...d.rows, [key]: { ...row, value: newValue } } };
-}
-
-// ── applyRoleEdit ──────────────────────────────────────────────────────────────
-
-/**
- * Flip a message's speaker. Sets BOTH the top-level `type` and `message.role`
- * (which normally mirror each other) in one write, so the saved file stays
- * internally consistent. No-op if the row is unparseable or unchanged.
- */
-export function applyRoleEdit(d: Draft, key: string, role: string): Draft {
-  const row = d.rows[key];
-  if (!row) return d;
-
-  const obj = parseLine(row.value);
-  if (obj === null) return d;
-
-  const cloned = deepClone(obj);
-  cloned['type'] = role;
-  const msg = cloned['message'] as Record<string, unknown> | undefined;
-  if (msg) msg['role'] = role;
-
-  const newValue = stringifyLine(cloned);
-  if (newValue === row.value) return d;
-  return { ...d, rows: { ...d.rows, [key]: { ...row, value: newValue, type: role } } };
-}
-
-// ── applyRawEdit ─────────────────────────────────────────────────────────────
-
-/**
- * Replace the entire line with user-supplied raw JSON (power-user escape
- * hatch for tool blocks etc.). The input is parsed and re-stringified to
- * canonical single-line JSON, so the saved file is guaranteed to remain valid,
- * parseable JSONL. THROWS if the input is not a valid JSON object/array — the
- * caller must catch and surface the error (we reject rather than save garbage).
- * The row's stable map key is preserved even if the uuid inside it changes.
- */
-export function applyRawEdit(d: Draft, key: string, newRawLine: string): Draft {
-  const row = d.rows[key];
-  if (!row) return d;
-
-  const parsed = losslessParse(newRawLine); // throws on invalid JSON — caller catches
-  if (typeof parsed !== 'object' || parsed === null || isLosslessNumber(parsed)) {
-    throw new Error('Top-level JSON must be an object or array.');
-  }
-
-  const normalized = stringifyLine(parsed);
-  const obj = Array.isArray(parsed) ? null : (parsed as Record<string, unknown>);
-  const newUuid = obj && typeof obj['uuid'] === 'string' ? (obj['uuid'] as string) : row.uuid;
-  const newType = obj && typeof obj['type'] === 'string' ? (obj['type'] as string) : row.type;
-
-  if (normalized === row.value) return d;
-  return {
-    ...d,
-    rows: { ...d.rows, [key]: { ...row, value: normalized, uuid: newUuid, type: newType } },
-  };
 }
 
 // ── SessionInfo + extractSessionInfo ──────────────────────────────────────────

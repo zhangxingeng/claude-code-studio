@@ -15,10 +15,7 @@ const {
   serializeDraft,
   isDirty,
   applyBlockTextEdit,
-  applyRoleEdit,
-  applyRawEdit,
   extractSessionInfo,
-  MESSAGE_ROLES,
 } = await import(join(root, 'src/lib/editDraft.ts'));
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -152,49 +149,6 @@ assert(info.userCount === 1, `userCount: ${info.userCount}`);
 assert(info.assistantCount === 1, `assistantCount: ${info.assistantCount}`);
 assert(info.lineCount === 4, `lineCount: ${info.lineCount}`);
 
-// ── Test: enum catalogs ───────────────────────────────────────────────────────
-console.log('\n[enum catalogs]');
-assert(Array.isArray(MESSAGE_ROLES) && MESSAGE_ROLES.includes('user'), 'MESSAGE_ROLES has user');
-assert(Array.isArray(MESSAGE_ROLES) && MESSAGE_ROLES.includes('assistant'), 'MESSAGE_ROLES has assistant');
-
-// ── Test: applyRoleEdit flips both type and message.role atomically ───────────
-console.log('\n[applyRoleEdit]');
-{
-  const line = JSON.stringify({ type: 'assistant', uuid: 'r1', message: { role: 'assistant', content: 'hi' } });
-  let d = buildDraft(line + '\n', '/p', 0);
-  d = applyRoleEdit(d, 'r1', 'user');
-  const obj = JSON.parse(serializeDraft(d).trim());
-  assert(obj.type === 'user', `top-level type flipped: ${obj.type}`);
-  assert(obj.message.role === 'user', `message.role flipped: ${obj.message.role}`);
-  assert(d.rows['r1'].type === 'user', 'row.type mirrors the flipped role');
-  assert(isDirty(d), 'isDirty true after role edit');
-}
-
-// ── Test: applyRawEdit validates + normalizes; rejects invalid JSON ──────────
-console.log('\n[applyRawEdit]');
-{
-  const line = JSON.stringify({ type: 'user', uuid: 'x1', message: { role: 'user', content: 'a' } });
-  let d = buildDraft(line + '\n', '/p', 0);
-
-  // Valid raw edit (pretty/multi-line input) is accepted and collapsed to one line
-  const pretty = '{\n  "type": "user",\n  "uuid": "x1",\n  "message": { "role": "user", "content": "b" }\n}';
-  d = applyRawEdit(d, 'x1', pretty);
-  const out = serializeDraft(d).trim();
-  assert(out.split('\n').length === 1, 'raw edit result is a single JSONL line');
-  assert(JSON.parse(out).message.content === 'b', 'raw edit applied new content');
-  assert(d.rows['x1'] !== undefined, 'row key stays stable across raw edit');
-
-  // Invalid JSON is rejected (throws), draft untouched by caller
-  let threw = false;
-  try { applyRawEdit(d, 'x1', '{ not valid json '); } catch { threw = true; }
-  assert(threw, 'invalid JSON raw edit throws');
-
-  // Non-object/array top-level is rejected
-  let threw2 = false;
-  try { applyRawEdit(d, 'x1', '42'); } catch { threw2 = true; }
-  assert(threw2, 'bare scalar raw edit throws');
-}
-
 // ── Test: no-op edits leave the draft byte-identical and non-dirty ──────────
 console.log('\n[no-op edit detection]');
 {
@@ -206,14 +160,6 @@ console.log('\n[no-op edit detection]');
   // Same via per-block edit on the array-content assistant text block.
   const sameBlock = applyBlockTextEdit(draft0, 'asst-uuid-001', 0, 'Here is my answer.');
   assert(sameBlock === draft0, 'applyBlockTextEdit (array content) no-op returns same draft');
-
-  // Role edit to the same role is a no-op.
-  const sameRole = applyRoleEdit(draft0, 'user-uuid-001', 'user');
-  assert(sameRole === draft0, 'applyRoleEdit to same role is a no-op');
-
-  // Raw edit that re-stringifies to the identical line is a no-op.
-  const sameRaw = applyRawEdit(draft0, 'user-uuid-001', draft0.rows['user-uuid-001'].original);
-  assert(sameRaw === draft0, 'applyRawEdit to identical line is a no-op');
 
   // A genuine change still mutates (guards against over-eager no-op).
   const changed = applyBlockTextEdit(draft0, 'user-uuid-001', 0, 'Different!');

@@ -6,14 +6,13 @@
    *   - every text block is editable in place on double-click (per-block, addressed
    *     by text ordinal — a bubble can hold several text blocks);
    *   - non-text blocks (thinking / tool calls) render collapsed via Block;
-   *   - a hover toolbar exposes speaker change and the raw-JSON escape hatch.
+   *   - a hover toolbar exposes fork-and-resume-from-here.
    *
    * Editing state is LOCAL to this component (self-contained); the parent only
    * receives committed mutations through the callback props.
    */
   import type { Entry } from '$lib/types';
   import type { DraftRow } from '$lib/editDraft';
-  import { MESSAGE_ROLES } from '$lib/editDraft';
   import { renderMarkdown } from '$lib/markdown';
   import Block from './Block.svelte';
 
@@ -21,15 +20,11 @@
     row,
     entry,
     onBlockEdit,
-    onRole,
-    onRaw,
     onResumeFrom,
   }: {
     row: DraftRow;
     entry: Entry;
     onBlockEdit: (ordinal: number, text: string) => void;
-    onRole: (role: string) => void;
-    onRaw: () => void;
     onResumeFrom: () => void;
   } = $props();
 
@@ -37,7 +32,6 @@
   let role = $derived<'user' | 'assistant'>(entry.type === 'user' ? 'user' : 'assistant');
   let label = $derived(role === 'user' ? 'User' : 'Assistant');
   let roleClass = $derived(role === 'user' ? 'msg--user' : 'msg--assistant');
-  let canRole = $derived(entry.type === 'user' || entry.type === 'assistant');
   let edited = $derived(row.value !== row.original);
 
   // Map each block index → its ordinal among text blocks (-1 for non-text).
@@ -77,18 +71,6 @@
 >
   <!-- Hover toolbar -->
   <div class="msg-tools">
-    {#if canRole}
-      <select
-        class="msg-tools__role"
-        value={entry.type}
-        onchange={(e) => onRole((e.target as HTMLSelectElement).value)}
-        title="Change speaker"
-      >
-        {#each MESSAGE_ROLES as r}<option value={r}>{r}</option>{/each}
-      </select>
-    {/if}
-
-    <button class="msg-tools__btn" onclick={onRaw} title="Edit raw JSON" type="button">{'{ }'}</button>
     <button class="msg-tools__btn" onclick={onResumeFrom} title="Fork &amp; resume from here" type="button">⑂</button>
   </div>
 
@@ -161,11 +143,6 @@
     font-size: 0.78rem; line-height: 1; padding: 0.18rem 0.32rem; border-radius: 0.25rem; font-family: inherit;
   }
   .msg-tools__btn:hover:not(:disabled) { background: var(--bg-subtle); color: var(--text); }
-  .msg-tools__role {
-    font-size: 0.62rem; padding: 0.1rem 0.25rem; border-radius: 0.25rem;
-    border: 1px solid var(--border-strong); background: var(--bg-card);
-    color: var(--text); font-family: var(--font-mono); cursor: pointer;
-  }
 
   /* Editable text body */
   .msg__body--editable { cursor: text; border-radius: 0.25rem; }
