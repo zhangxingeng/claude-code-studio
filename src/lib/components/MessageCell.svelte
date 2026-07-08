@@ -24,6 +24,9 @@
     row,
     entry,
     deletedBlocks,
+    selectMode = false,
+    selected = false,
+    onToggleSelect,
     onBlockEdit,
     onDeleteBlock,
     onUndeleteBlock,
@@ -32,6 +35,9 @@
     row: DraftRow;
     entry: Entry;
     deletedBlocks: Set<string>;
+    selectMode?: boolean;
+    selected?: boolean;
+    onToggleSelect?: () => void;
     onBlockEdit: (ordinal: number, text: string) => void;
     onDeleteBlock: (blockIndex: number) => void;
     onUndeleteBlock: (blockIndex: number) => void;
@@ -82,7 +88,15 @@
 <div
   class="msg-group"
   class:msg-group--editing={editingOrdinal !== null}
+  class:msg-group--selected={selectMode && selected}
 >
+  <!-- Select-mode checkbox (bulk multi-select) — the whole bubble is one unit. -->
+  {#if selectMode}
+    <label class="msg-select">
+      <input type="checkbox" checked={selected} onchange={() => onToggleSelect?.()} />
+    </label>
+  {/if}
+
   <!-- Hover toolbar -->
   <div class="msg-tools">
     <button class="msg-tools__btn" onclick={onResumeFrom} title="Fork &amp; resume from here" type="button">⑂</button>
@@ -152,6 +166,17 @@
 <style>
   .msg-group { position: relative; }
   .msg-group--editing { scroll-margin-top: 1rem; }
+  .msg-group--selected {
+    outline: 2px solid color-mix(in srgb, var(--accent-user) 55%, transparent);
+    outline-offset: 2px; border-radius: 0.45rem;
+  }
+
+  /* Select-mode checkbox, pinned to the bubble's top-left */
+  .msg-select {
+    position: absolute; top: 0.3rem; left: -1.35rem; z-index: 3;
+    display: flex; align-items: center; cursor: pointer;
+  }
+  .msg-select input { cursor: pointer; margin: 0; }
 
   .msg__header { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.4rem; }
   .block-slot__spacer { flex: 1; }

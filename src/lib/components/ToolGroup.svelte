@@ -27,6 +27,9 @@
   let {
     items,
     deletedBlocks,
+    selectMode = false,
+    selected = false,
+    onToggleSelect,
     onDeleteBlock,
     onUndeleteBlock,
     onDeleteGroup,
@@ -34,6 +37,9 @@
   }: {
     items: GroupItem[];
     deletedBlocks: Set<string>;
+    selectMode?: boolean;
+    selected?: boolean;
+    onToggleSelect?: () => void;
     onDeleteBlock: (rowKey: string, blockIndex: number) => void;
     onUndeleteBlock: (rowKey: string, blockIndex: number) => void;
     onDeleteGroup: () => void;
@@ -71,8 +77,13 @@
   );
 </script>
 
-<div class="tool-group" class:tool-group--deleted={allDeleted}>
+<div class="tool-group" class:tool-group--deleted={allDeleted} class:tool-group--selected={selectMode && selected}>
   <div class="tool-group__bar">
+    {#if selectMode}
+      <label class="tool-group__select">
+        <input type="checkbox" checked={selected} onchange={() => onToggleSelect?.()} />
+      </label>
+    {/if}
     <button
       class="tool-group__toggle"
       class:open
@@ -118,7 +129,12 @@
     background: color-mix(in srgb, var(--bg-subtle) 55%, transparent);
   }
   .tool-group--deleted { opacity: 0.5; }
+  .tool-group--selected {
+    outline: 2px solid color-mix(in srgb, var(--accent-user) 55%, transparent); outline-offset: 2px;
+  }
   .tool-group__bar { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.5rem; }
+  .tool-group__select { display: flex; align-items: center; cursor: pointer; }
+  .tool-group__select input { cursor: pointer; margin: 0; }
   .tool-group__toggle {
     flex: 1; display: inline-flex; align-items: center; gap: 0.45rem;
     background: none; border: 0; cursor: pointer; font-family: inherit; text-align: left;
