@@ -42,11 +42,19 @@
     isDirty,
     applyBlockTextEdit,
     extractSessionInfo,
+    blockKey,
+    deleteMessage,
+    deleteThinking,
+    deleteToolGroup,
+    deleteBulk,
+    undelete,
   } from '$lib/editDraft';
   import type { Draft, DraftRow } from '$lib/editDraft';
-  import { groupDisplayItems } from '$lib/displayModel';
+  import { groupDisplayItems, deriveTurnSpans } from '$lib/displayModel';
   import SessionMetaCard from './SessionMetaCard.svelte';
   import MessageCell from './MessageCell.svelte';
+  import ToolGroup from './ToolGroup.svelte';
+  import TurnDivider from './TurnDivider.svelte';
   import InlineSearchPanel from './InlineSearchPanel.svelte';
 
   // ── Props ──────────────────────────────────────────────────────────────────
@@ -93,6 +101,13 @@
   // Find-in-chat — reuses the shared search store, scoped to this one session.
   let searchOpen = $state(false);
 
+  // Bulk multi-select (issue #14 checkpoint 5). `selectMode` toggles checkboxes
+  // on each deletable unit; `selectedUnits` holds unit ids (derived from stable
+  // row keys, so the selection survives visibleCount windowing). "Delete
+  // selected" soft-deletes the union of their blocks via deleteBulk.
+  let selectMode = $state(false);
+  let selectedUnits = $state<Set<string>>(new Set());
+
   // Back-to-top — shown once the page has scrolled past the header.
   let showBackToTop = $state(false);
 
@@ -133,6 +148,7 @@
     for (const key of draft.order) {
       if (draft.rows[key].value !== draft.rows[key].original) n++;
     }
+    n += draft.deletedBlocks.size;
     return n;
   });
 
@@ -140,6 +156,7 @@
     key: string;
     row: DraftRow;
     entry: Entry;
+    hasText: boolean;
   }
 
   function parseLine(line: string): Entry | null {
@@ -147,9 +164,9 @@
     return es.length > 0 ? es[0] : null;
   }
 
-  // Renderable rows (conversational lines with visible blocks — user/assistant
-  // text only). Pure meta/echo lines parse to nothing here but stay preserved
-  // in the draft and pass through untouched on save.
+  // Renderable rows (conversational lines with visible blocks — text,
+  // thinking, tool_use, tool_result). Pure meta/echo lines parse to nothing
+  // here but stay preserved in the draft and pass through untouched on save.
   let renderable = $derived.by<RenderRow[]>(() => {
     if (!draft) return [];
     const out: RenderRow[] = [];
@@ -157,7 +174,7 @@
       const row = draft.rows[key];
       const entry = parseLine(row.value);
       if (!entry || entry.blocks.length === 0) continue;
-      out.push({ key, row, entry });
+      out.push({ key, row, entry, hasText: entry.blocks.some((b) => b.blockType === 'text') });
     }
     return out;
   });
@@ -165,9 +182,56 @@
   // Fast key → RenderRow lookup for the display loop.
   let rmap = $derived(new Map(renderable.map((r) => [r.key, r])));
 
-  // One chat bubble per renderable row.
-  let displayItems = $derived(groupDisplayItems(renderable.map((r) => r.key)));
+  // Chat bubbles interleaved with collapsed tool-activity groups.
+  let displayItems = $derived(
+    groupDisplayItems(renderable.map((r) => ({ key: r.key, hasText: r.hasText })))
+  );
   let visibleItems = $derived(displayItems.slice(0, visibleCount));
+
+  // Turn spans (delete-as-a-unit): a user-with-text bubble starts a turn and it
+  // runs to the next such bubble (see displayModel.ts). A turn always begins on
+  // a display-item boundary (a user-with-text row is its own message bubble,
+  // never inside a tool group), so we can key the divider by the span's first
+  // row key and render it above whichever display item starts there.
+  let turnSpans = $derived(
+    deriveTurnSpans(renderable.map((r) => ({ key: r.key, type: r.entry.type, hasText: r.hasText })))
+  );
+  let turnByStartKey = $derived.by(() => {
+    const m = new Map<string, string[]>();
+    for (const span of turnSpans) m.set(span.keys[0], span.keys);
+    return m;
+  });
+
+  // ── Bulk selection units (issue #14 checkpoint 5) ────────────────────────
+  // The atomic selectable units are the display items themselves: one per
+  // message bubble, one per tool group. Each maps to the row keys it covers,
+  // keyed by a stable id (derived from row keys, not DOM position) so the
+  // selection is windowing-proof.
+  function messageUnitId(key: string): string { return `m:${key}`; }
+  function groupUnitId(firstKey: string): string { return `g:${firstKey}`; }
+  let unitRowKeys = $derived.by(() => {
+    const m = new Map<string, string[]>();
+    for (const it of displayItems) {
+      if (it.kind === 'message') m.set(messageUnitId(it.key), [it.key]);
+      else m.set(groupUnitId(it.keys[0]), it.keys);
+    }
+    return m;
+  });
+  // The atomic unit ids that make up each turn (its child message + group
+  // units), so the turn checkbox can select/deselect the whole span at once.
+  let turnUnitIds = $derived.by(() => {
+    const m = new Map<string, string[]>();
+    for (const span of turnSpans) {
+      const set = new Set(span.keys);
+      const ids: string[] = [];
+      for (const it of displayItems) {
+        const firstKey = it.kind === 'message' ? it.key : it.keys[0];
+        if (set.has(firstKey)) ids.push(it.kind === 'message' ? messageUnitId(it.key) : groupUnitId(it.keys[0]));
+      }
+      m.set(span.keys[0], ids);
+    }
+    return m;
+  });
 
   // ── Jump-to-hit (from search) ────────────────────────────────────────────
   // Find the display-item index whose message uuid matches, ensure it's within
@@ -176,7 +240,9 @@
     if (!draft) return;
     const rr = renderable.find((r) => r.entry.uuid === uuid);
     if (!rr) return;
-    const idx = displayItems.findIndex((it) => it.key === rr.key);
+    const idx = displayItems.findIndex((it) =>
+      it.kind === 'message' ? it.key === rr.key : it.keys.includes(rr.key)
+    );
     if (idx < 0) return;
     if (idx >= visibleCount) visibleCount = idx + 50;
     await tick();
@@ -221,6 +287,7 @@
       if (showDiscardModal) { showDiscardModal = false; return true; }
       if (showSaveModal) { showSaveModal = false; return true; }
       if (showExitModal) { showExitModal = false; return true; }
+      if (selectMode) { exitSelectMode(); return true; }
       return false;
     }
     function onKeydown(e: KeyboardEvent) {
@@ -296,6 +363,107 @@
   function doBlockEdit(key: string, ordinal: number, text: string) {
     if (draft) mutate(applyBlockTextEdit(draft, key, ordinal, text));
   }
+
+  // ── Soft delete (issue #14) ──────────────────────────────────────────────
+  // A single block's delete op picks the right wrapper by block type; the
+  // pairing cascade (tool_use ↔ tool_result — never an orphan) lives inside
+  // editDraft.ts's deleteToolGroup/undelete, not here.
+  function doDeleteBlock(key: string, blockIndex: number) {
+    if (!draft) return;
+    const rr = rmap.get(key);
+    if (!rr) return;
+    const bk = blockKey(rr.row, blockIndex);
+    const block = rr.entry.blocks[blockIndex];
+    if (!block) return;
+    if (block.blockType === 'text') mutate(deleteMessage(draft, bk));
+    else if (block.blockType === 'thinking') mutate(deleteThinking(draft, bk));
+    else mutate(deleteToolGroup(draft, [bk])); // tool_use / tool_result — cascades to its pair
+  }
+  function doUndeleteBlock(key: string, blockIndex: number) {
+    if (!draft) return;
+    const rr = rmap.get(key);
+    if (!rr) return;
+    mutate(undelete(draft, [blockKey(rr.row, blockIndex)]));
+  }
+
+  // Expand a set of row keys to every block key they carry. The single source
+  // of truth for "which block keys does this unit cover" — used by tool-group,
+  // turn, and bulk deletes alike, so none of them hand-roll key math (the
+  // originalIndex:contentIndex invariant lives only in editDraft.blockKey).
+  function rowsBlockKeys(keys: string[]): string[] {
+    const out: string[] = [];
+    for (const rowKey of keys) {
+      const rr = rmap.get(rowKey);
+      if (!rr) continue;
+      rr.entry.blocks.forEach((_, bi) => out.push(blockKey(rr.row, bi)));
+    }
+    return out;
+  }
+  /** True when every block across the given rows is already soft-deleted (drives
+   *  the Delete↔Restore label flip for groups and turns). */
+  function rowsAllDeleted(keys: string[]): boolean {
+    if (!draft) return false;
+    const bks = rowsBlockKeys(keys);
+    return bks.length > 0 && bks.every((k) => draft!.deletedBlocks.has(k));
+  }
+  function doDeleteToolGroup(keys: string[]) {
+    if (draft) mutate(deleteToolGroup(draft, rowsBlockKeys(keys)));
+  }
+  function doUndeleteToolGroup(keys: string[]) {
+    if (draft) mutate(undelete(draft, rowsBlockKeys(keys)));
+  }
+
+  // ── Turn-level delete (issue #14 checkpoint 4) ───────────────────────────
+  // A turn is a span of row keys (see turnSpans). Delete soft-deletes every
+  // block in the span via deleteBulk (cascade-aware — an in-span tool_use
+  // still pulls its tool_result); restore undeletes the same keys. Both go
+  // through rowsBlockKeys → the block-key primitives, no bespoke key math.
+  function doDeleteTurn(keys: string[]) {
+    if (draft) mutate(deleteBulk(draft, rowsBlockKeys(keys)));
+  }
+  function doUndeleteTurn(keys: string[]) {
+    if (draft) mutate(undelete(draft, rowsBlockKeys(keys)));
+  }
+
+  // ── Bulk multi-select (issue #14 checkpoint 5) ───────────────────────────
+  function enterSelectMode() { selectMode = true; }
+  function exitSelectMode() { selectMode = false; selectedUnits = new Set(); }
+  function clearSelection() { selectedUnits = new Set(); }
+
+  function toggleUnit(unitId: string) {
+    const next = new Set(selectedUnits);
+    if (next.has(unitId)) next.delete(unitId);
+    else next.add(unitId);
+    selectedUnits = next;
+  }
+  /** A turn is "selected" when all of its child units are selected. Toggling
+   *  it flips the whole span in one shot. */
+  function turnSelected(startKey: string): boolean {
+    const ids = turnUnitIds.get(startKey) ?? [];
+    return ids.length > 0 && ids.every((id) => selectedUnits.has(id));
+  }
+  function toggleTurn(startKey: string) {
+    const ids = turnUnitIds.get(startKey) ?? [];
+    const next = new Set(selectedUnits);
+    if (ids.every((id) => next.has(id))) for (const id of ids) next.delete(id);
+    else for (const id of ids) next.add(id);
+    selectedUnits = next;
+  }
+
+  /** Soft-delete every block covered by the currently selected units. Cascade
+   *  in deleteBulk still pulls any paired tool_result whose tool_use is in the
+   *  selection (or vice versa). Reversible, so no confirm. */
+  function deleteSelected() {
+    if (!draft || selectedUnits.size === 0) return;
+    const rowKeys = new Set<string>();
+    for (const id of selectedUnits) {
+      const rks = unitRowKeys.get(id);
+      if (rks) for (const k of rks) rowKeys.add(k);
+    }
+    mutate(deleteBulk(draft, rowsBlockKeys([...rowKeys])));
+    selectedUnits = new Set();
+  }
+
   async function doResumeFrom(key: string) {
     if (!draft) return;
     const row = draft.rows[key];
@@ -478,7 +646,7 @@
     <SessionMetaCard info={sessionInfo} />
   {/if}
 
-  <!-- ── Find in chat ───────────────────────────────────────────────────────── -->
+  <!-- ── Find in chat + Select mode ─────────────────────────────────────────── -->
   {#if searchOpen}
     <InlineSearchPanel sessionPath={path} onJump={jumpTo} onClose={() => (searchOpen = false)} />
   {:else}
@@ -486,20 +654,69 @@
       <button class="btn btn--ghost btn--sm" onclick={() => (searchOpen = true)} type="button">
         🔍 Find in chat <span class="find-toggle-row__kbd">Ctrl+F</span>
       </button>
+      {#if selectMode}
+        <button
+          class="btn btn--sm btn--danger"
+          onclick={deleteSelected}
+          disabled={selectedUnits.size === 0}
+          type="button"
+        >Delete selected ({selectedUnits.size})</button>
+        <button
+          class="btn btn--sm btn--ghost"
+          onclick={clearSelection}
+          disabled={selectedUnits.size === 0}
+          type="button"
+        >Clear selection</button>
+        <button class="btn btn--sm btn--ghost" onclick={exitSelectMode} type="button">Done</button>
+      {:else}
+        <button class="btn btn--ghost btn--sm" onclick={enterSelectMode} type="button">☑ Select</button>
+      {/if}
     </div>
   {/if}
 
   <!-- ── Messages ─────────────────────────────────────────────────────────── -->
   <div class="session-turns">
-    {#each visibleItems as item (item.key)}
-      {@const rr = rmap.get(item.key)}
+    {#each visibleItems as item, ii (item.kind === 'message' ? item.key : item.keys.join('|') + ':' + ii)}
+      {@const startKey = item.kind === 'message' ? item.key : item.keys[0]}
+      {@const turnKeys = turnByStartKey.get(startKey)}
+      {#if turnKeys}
+        <TurnDivider
+          deleted={rowsAllDeleted(turnKeys)}
+          selectMode={selectMode}
+          selected={turnSelected(startKey)}
+          onDelete={() => doDeleteTurn(turnKeys)}
+          onUndelete={() => doUndeleteTurn(turnKeys)}
+          onToggleSelect={() => toggleTurn(startKey)}
+        />
+      {/if}
       <div class="jump-anchor">
-        {#if rr}
-          <MessageCell
-            row={rr.row}
-            entry={rr.entry}
-            onBlockEdit={(o, t) => doBlockEdit(item.key, o, t)}
-            onResumeFrom={() => doResumeFrom(item.key)}
+        {#if item.kind === 'message'}
+          {@const rr = rmap.get(item.key)}
+          {#if rr}
+            <MessageCell
+              row={rr.row}
+              entry={rr.entry}
+              deletedBlocks={draft.deletedBlocks}
+              selectMode={selectMode}
+              selected={selectedUnits.has(messageUnitId(item.key))}
+              onToggleSelect={() => toggleUnit(messageUnitId(item.key))}
+              onBlockEdit={(o, t) => doBlockEdit(item.key, o, t)}
+              onDeleteBlock={(bi) => doDeleteBlock(item.key, bi)}
+              onUndeleteBlock={(bi) => doUndeleteBlock(item.key, bi)}
+              onResumeFrom={() => doResumeFrom(item.key)}
+            />
+          {/if}
+        {:else}
+          <ToolGroup
+            items={item.keys.map((k) => rmap.get(k)).filter((r) => r !== undefined)}
+            deletedBlocks={draft.deletedBlocks}
+            selectMode={selectMode}
+            selected={selectedUnits.has(groupUnitId(item.keys[0]))}
+            onToggleSelect={() => toggleUnit(groupUnitId(item.keys[0]))}
+            onDeleteBlock={(rowKey, bi) => doDeleteBlock(rowKey, bi)}
+            onUndeleteBlock={(rowKey, bi) => doUndeleteBlock(rowKey, bi)}
+            onDeleteGroup={() => doDeleteToolGroup(item.keys)}
+            onUndeleteGroup={() => doUndeleteToolGroup(item.keys)}
           />
         {/if}
       </div>
@@ -628,7 +845,7 @@
   .rename-error { font-size: 0.75rem; color: var(--accent-result-err); margin: 0; }
 
   /* ── Find-in-chat toggle ────────────────────────────────────── */
-  .find-toggle-row { margin-bottom: 0.75rem; }
+  .find-toggle-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
   .find-toggle-row__kbd { color: var(--text-faint); font-size: 0.7rem; margin-left: 0.3rem; }
 
   /* ── Back to top ──────────────────────────────────────────────  */

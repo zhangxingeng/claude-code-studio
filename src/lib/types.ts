@@ -4,8 +4,28 @@
  */
 
 export interface ContentBlock {
-  blockType: 'text';
+  // 'unknown' is a structural placeholder for any message.content element the
+  // parser doesn't otherwise model (image, redacted_thinking, server_tool_use,
+  // MCP result blocks, a non-object element, …). It exists so `Entry.blocks`
+  // stays 1:1 (same length AND order) with the raw `message.content` array —
+  // block index == content index everywhere. The soft-delete model keys and
+  // removes blocks by that index, so any drift would delete the WRONG content
+  // element on Save (the exact corruption class issue #13 fought).
+  blockType: 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'unknown';
+  // text / thinking
   text?: string;
+  thinking?: string;
+  signature?: string;
+  // tool_use fields
+  toolName?: string;
+  toolId?: string;
+  toolInput?: Record<string, unknown>;
+  // tool_result fields (matched in from global registry)
+  toolOutput?: string;
+  isError?: boolean;
+  // unknown: the raw content-element `type` string, if any (for the read-only
+  // placeholder chip). Undefined for a non-object content element.
+  rawType?: string;
 }
 
 export interface Entry {
