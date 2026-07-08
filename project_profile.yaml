@@ -15,9 +15,9 @@
 # Do NOT commit secrets here.
 
 # ── LLM providers ──────────────────────────────────────────────
-build_provider: "" # The default LLM provider for dispatched build sessions
-audited_providers: [] # Providers approved for repo-mutating dispatch (security boundary)
-cold_audit_provider: "" # Provider used for cold-audit / adversarial-review passes
+build_provider: "sonnet" # The default LLM provider for dispatched build sessions
+audited_providers: ["sonnet"] # Providers approved for repo-mutating dispatch (security boundary)
+cold_audit_provider: "sonnet" # Provider used for cold-audit / adversarial-review passes
 
 # ── Git / workspace ────────────────────────────────────────────
 integration_branch: "main" # The branch PRs target; the merge-base for worktrees
