@@ -42,6 +42,11 @@
     isDirty,
     applyBlockTextEdit,
     extractSessionInfo,
+    blockKey,
+    deleteMessage,
+    deleteThinking,
+    deleteToolGroup,
+    undelete,
   } from '$lib/editDraft';
   import type { Draft, DraftRow } from '$lib/editDraft';
   import { groupDisplayItems } from '$lib/displayModel';
@@ -134,6 +139,7 @@
     for (const key of draft.order) {
       if (draft.rows[key].value !== draft.rows[key].original) n++;
     }
+    n += draft.deletedBlocks.size;
     return n;
   });
 
@@ -302,6 +308,48 @@
   function doBlockEdit(key: string, ordinal: number, text: string) {
     if (draft) mutate(applyBlockTextEdit(draft, key, ordinal, text));
   }
+
+  // ── Soft delete (issue #14) ──────────────────────────────────────────────
+  // A single block's delete op picks the right wrapper by block type; the
+  // pairing cascade (tool_use ↔ tool_result — never an orphan) lives inside
+  // editDraft.ts's deleteToolGroup/undelete, not here.
+  function doDeleteBlock(key: string, blockIndex: number) {
+    if (!draft) return;
+    const rr = rmap.get(key);
+    if (!rr) return;
+    const bk = blockKey(rr.row, blockIndex);
+    const block = rr.entry.blocks[blockIndex];
+    if (!block) return;
+    if (block.blockType === 'text') mutate(deleteMessage(draft, bk));
+    else if (block.blockType === 'thinking') mutate(deleteThinking(draft, bk));
+    else mutate(deleteToolGroup(draft, [bk])); // tool_use / tool_result — cascades to its pair
+  }
+  function doUndeleteBlock(key: string, blockIndex: number) {
+    if (!draft) return;
+    const rr = rmap.get(key);
+    if (!rr) return;
+    mutate(undelete(draft, [blockKey(rr.row, blockIndex)]));
+  }
+
+  // Whole-group delete/undelete: every block in every member row of a
+  // toolgroup. (Turn-level delete and multi-select bulk delete are a later
+  // phase — this is just the one existing grouping unit, per issue #14.)
+  function groupBlockKeys(keys: string[]): string[] {
+    const out: string[] = [];
+    for (const rowKey of keys) {
+      const rr = rmap.get(rowKey);
+      if (!rr) continue;
+      rr.entry.blocks.forEach((_, bi) => out.push(blockKey(rr.row, bi)));
+    }
+    return out;
+  }
+  function doDeleteToolGroup(keys: string[]) {
+    if (draft) mutate(deleteToolGroup(draft, groupBlockKeys(keys)));
+  }
+  function doUndeleteToolGroup(keys: string[]) {
+    if (draft) mutate(undelete(draft, groupBlockKeys(keys)));
+  }
+
   async function doResumeFrom(key: string) {
     if (!draft) return;
     const row = draft.rows[key];
@@ -505,13 +553,21 @@
             <MessageCell
               row={rr.row}
               entry={rr.entry}
+              deletedBlocks={draft.deletedBlocks}
               onBlockEdit={(o, t) => doBlockEdit(item.key, o, t)}
+              onDeleteBlock={(bi) => doDeleteBlock(item.key, bi)}
+              onUndeleteBlock={(bi) => doUndeleteBlock(item.key, bi)}
               onResumeFrom={() => doResumeFrom(item.key)}
             />
           {/if}
         {:else}
           <ToolGroup
             items={item.keys.map((k) => rmap.get(k)).filter((r) => r !== undefined)}
+            deletedBlocks={draft.deletedBlocks}
+            onDeleteBlock={(rowKey, bi) => doDeleteBlock(rowKey, bi)}
+            onUndeleteBlock={(rowKey, bi) => doUndeleteBlock(rowKey, bi)}
+            onDeleteGroup={() => doDeleteToolGroup(item.keys)}
+            onUndeleteGroup={() => doUndeleteToolGroup(item.keys)}
           />
         {/if}
       </div>

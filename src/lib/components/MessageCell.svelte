@@ -5,7 +5,10 @@
    * Renders exactly like the read-only viewer (shared Block.svelte styling) but:
    *   - every text block is editable in place on double-click (per-block, addressed
    *     by text ordinal — a bubble can hold several text blocks);
-   *   - non-text blocks (thinking / tool calls) render collapsed via Block;
+   *   - non-text blocks (thinking / tool calls) render read-only via Block;
+   *   - every block (text or not) has a soft delete/undelete affordance — deleted
+   *     blocks fade in place and show "Undelete"; nothing leaves the file until
+   *     Save (see editDraft.ts's deletedBlocks);
    *   - a hover toolbar exposes fork-and-resume-from-here.
    *
    * Editing state is LOCAL to this component (self-contained); the parent only
@@ -13,18 +16,25 @@
    */
   import type { Entry } from '$lib/types';
   import type { DraftRow } from '$lib/editDraft';
+  import { blockKey } from '$lib/editDraft';
   import { renderMarkdown } from '$lib/markdown';
   import Block from './Block.svelte';
 
   let {
     row,
     entry,
+    deletedBlocks,
     onBlockEdit,
+    onDeleteBlock,
+    onUndeleteBlock,
     onResumeFrom,
   }: {
     row: DraftRow;
     entry: Entry;
+    deletedBlocks: Set<string>;
     onBlockEdit: (ordinal: number, text: string) => void;
+    onDeleteBlock: (blockIndex: number) => void;
+    onUndeleteBlock: (blockIndex: number) => void;
     onResumeFrom: () => void;
   } = $props();
 
@@ -33,6 +43,10 @@
   let label = $derived(role === 'user' ? 'User' : 'Assistant');
   let roleClass = $derived(role === 'user' ? 'msg--user' : 'msg--assistant');
   let edited = $derived(row.value !== row.original);
+
+  function isDeleted(bi: number): boolean {
+    return deletedBlocks.has(blockKey(row, bi));
+  }
 
   // Map each block index → its ordinal among text blocks (-1 for non-text).
   let textOrdinals = $derived.by<number[]>(() => {
@@ -74,15 +88,24 @@
     <button class="msg-tools__btn" onclick={onResumeFrom} title="Fork &amp; resume from here" type="button">⑂</button>
   </div>
 
-  <!-- Blocks: text blocks are editable; everything else renders read-only -->
+  <!-- Blocks: text blocks are editable; everything else renders read-only.
+       Every block gets a delete/undelete affordance (soft delete). -->
   {#each entry.blocks as block, bi (bi)}
+    {@const deleted = isDeleted(bi)}
     {#if block.blockType === 'text'}
       {@const ordinal = textOrdinals[bi]}
-      <div class="msg {roleClass}">
+      <div class="msg {roleClass} block-slot" class:block-slot--deleted={deleted}>
         <div class="msg__inner">
           <div class="msg__header">
             <span class="msg__label">{label}</span>
             {#if edited}<span class="row-edited-badge">edited</span>{/if}
+            {#if deleted}<span class="row-deleted-badge">deleted</span>{/if}
+            <span class="block-slot__spacer"></span>
+            {#if deleted}
+              <button class="msg-tools__btn" onclick={() => onUndeleteBlock(bi)} type="button">Undelete</button>
+            {:else}
+              <button class="msg-tools__btn msg-tools__btn--danger" onclick={() => onDeleteBlock(bi)} title="Delete" type="button">✕</button>
+            {/if}
           </div>
           {#if editingOrdinal === ordinal}
             <!-- svelte-ignore a11y_autofocus -->
@@ -98,6 +121,8 @@
               <button class="btn btn--sm btn--primary" onmousedown={(e) => { e.preventDefault(); commitEdit(); }} type="button">Save</button>
               <button class="btn btn--sm btn--ghost" onmousedown={(e) => { e.preventDefault(); cancelEdit(); }} type="button">Cancel</button>
             </div>
+          {:else if deleted}
+            <div class="msg__body">{@html renderMarkdown(block.text ?? '')}</div>
           {:else}
             <div
               class="msg__body msg__body--editable"
@@ -110,7 +135,16 @@
         </div>
       </div>
     {:else}
-      <Block {block} {role} />
+      <div class="block-slot" class:block-slot--deleted={deleted}>
+        <div class="block-slot__tools">
+          {#if deleted}
+            <button class="msg-tools__btn" onclick={() => onUndeleteBlock(bi)} type="button">Undelete</button>
+          {:else}
+            <button class="msg-tools__btn msg-tools__btn--danger" onclick={() => onDeleteBlock(bi)} title="Delete" type="button">✕</button>
+          {/if}
+        </div>
+        <Block {block} {role} />
+      </div>
     {/if}
   {/each}
 </div>
@@ -120,11 +154,19 @@
   .msg-group--editing { scroll-margin-top: 1rem; }
 
   .msg__header { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.4rem; }
+  .block-slot__spacer { flex: 1; }
   .row-edited-badge {
     font-size: 0.58rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--accent-user);
     background: color-mix(in srgb, var(--accent-user) 12%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-user) 30%, transparent);
+    padding: 0.08rem 0.35rem; border-radius: 0.2rem;
+  }
+  .row-deleted-badge {
+    font-size: 0.58rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--accent-result-err);
+    background: color-mix(in srgb, var(--accent-result-err) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-result-err) 30%, transparent);
     padding: 0.08rem 0.35rem; border-radius: 0.2rem;
   }
 
@@ -143,6 +185,7 @@
     font-size: 0.78rem; line-height: 1; padding: 0.18rem 0.32rem; border-radius: 0.25rem; font-family: inherit;
   }
   .msg-tools__btn:hover:not(:disabled) { background: var(--bg-subtle); color: var(--text); }
+  .msg-tools__btn--danger:hover { color: var(--accent-result-err); background: color-mix(in srgb, var(--accent-result-err) 12%, transparent); }
 
   /* Editable text body */
   .msg__body--editable { cursor: text; border-radius: 0.25rem; }
@@ -158,4 +201,18 @@
   .editor-textarea:focus { outline: 2px solid var(--accent-user); outline-offset: 1px; }
   .cell-edit-actions { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.45rem; }
   .cell-edit-hint { flex: 1; font-size: 0.68rem; color: var(--text-faint); }
+
+  /* Soft-deleted blocks: fade in place (non-text blocks — text-block fade is
+     handled inline via .row-deleted-badge + normal opacity below). */
+  .block-slot { position: relative; }
+  .block-slot--deleted { opacity: 0.45; }
+  .block-slot--deleted :global(.msg__body) { text-decoration: line-through; }
+  .block-slot__tools {
+    position: absolute; top: 0.3rem; right: 0.3rem; z-index: 2;
+    display: flex; gap: 0.2rem; opacity: 0; transition: opacity 0.1s;
+  }
+  .block-slot:hover .block-slot__tools, .block-slot--deleted .block-slot__tools { opacity: 1; }
+  .block-slot__tools .msg-tools__btn {
+    background: color-mix(in srgb, var(--bg-card) 90%, transparent); border: 1px solid var(--border);
+  }
 </style>
