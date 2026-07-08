@@ -21,13 +21,11 @@
    *                 the editor to handle exit with a dirty-guard prompt.
    */
   import { onMount, tick } from 'svelte';
-  import type { BackupVersion, Entry } from '$lib/types';
+  import type { Entry } from '$lib/types';
   import {
     readSession,
     writeSession,
     snapshot,
-    listBackups,
-    restoreBackup,
     forkSession,
     resumeInTerminal,
   } from '$lib/api';
@@ -91,10 +89,6 @@
   let showSaveModal = $state(false);
   let showDiscardModal = $state(false);
   let showExitModal = $state(false);
-  // Single-slot restore-backup affordance: no history list, no version picker —
-  // there's only ever one backup file, so this holds at most one candidate.
-  let showRestoreModal = $state(false);
-  let restoreCandidate = $state<BackupVersion | null>(null);
   let saving = $state(false);
 
   // Toast
@@ -205,7 +199,6 @@
   onMount(() => {
     function closeTopModal(): boolean {
       if (titleRenameConfirming) { titleRenameConfirming = false; return true; }
-      if (showRestoreModal) { showRestoreModal = false; restoreCandidate = null; return true; }
       if (showDiscardModal) { showDiscardModal = false; return true; }
       if (showSaveModal) { showSaveModal = false; return true; }
       if (showExitModal) { showExitModal = false; return true; }
@@ -224,7 +217,7 @@
         e.preventDefault();
         if (
           !draft || !dirty ||
-          showSaveModal || showDiscardModal || showExitModal || showRestoreModal ||
+          showSaveModal || showDiscardModal || showExitModal ||
           renamingTitle
         ) {
           return;
@@ -377,45 +370,6 @@
     showToast('Edits discarded.');
   }
 
-  // ── Restore backup (single-slot: button + confirm, no history list) ────────
-  async function openRestoreBackup() {
-    try {
-      const list = await listBackups(path);
-      if (list.length === 0) {
-        showToast('No backup available yet.');
-        return;
-      }
-      restoreCandidate = list[0];
-      showRestoreModal = true;
-    } catch (e) {
-      showToast(`Could not check backups: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  function cancelRestoreBackup() {
-    showRestoreModal = false;
-    restoreCandidate = null;
-  }
-  async function confirmRestoreBackup() {
-    if (!restoreCandidate) return;
-    const bk = restoreCandidate;
-    showRestoreModal = false;
-    restoreCandidate = null;
-    saving = true;
-    try {
-      // Snapshot current state first, so restoring is itself reversible.
-      await snapshot(path);
-      const restored = await restoreBackup(bk.path);
-      await writeSession(path, restored);
-      rawText = restored;
-      draft = buildDraft(restored, path, Math.floor(Date.now() / 1000));
-      showToast(`Restored backup from ${formatTimestamp(bk.timestamp)}.`);
-    } catch (e) {
-      showToast(`Restore failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      saving = false;
-    }
-  }
-
   // ── Exit (dirty guard, driven by parent's ← Back) ───────────────────────────
   function attemptExit() {
     if (!draft || !isDirty(draft)) {
@@ -447,11 +401,6 @@
   function exitDiscard() {
     showExitModal = false;
     onExit();
-  }
-
-  // ── Format helpers ──────────────────────────────────────────────────────────
-  function formatTimestamp(unix: number): string {
-    return new Date(unix * 1000).toLocaleString();
   }
 </script>
 
@@ -543,7 +492,6 @@
     onSave={() => (showSaveModal = true)}
     onSaveCopy={saveAsCopy}
     onDiscard={() => (showDiscardModal = true)}
-    onRestoreBackup={openRestoreBackup}
   />
 
   <!-- ── Back to top ─────────────────────────────────────────────────────────── -->
@@ -578,7 +526,7 @@
       <div class="modal__warning">
         This rewrites your real Claude chat history at:<br /><strong data-copy-text={path}>{path}</strong>
       </div>
-      <p>A backup snapshot is created first — restore any time with "Restore backup".</p>
+      <p>A backup snapshot is saved first as insurance before your history is overwritten.</p>
       <div class="modal__actions">
         <button class="btn btn--sm btn--ghost" onclick={() => (showSaveModal = false)} type="button">Cancel</button>
         <button class="btn btn--sm btn--primary" onclick={confirmSave} type="button">Save (backup first)</button>
@@ -612,24 +560,6 @@
         <button class="btn btn--sm" onclick={exitSaveCopy} disabled={saving} type="button">Save as a copy</button>
         <button class="btn btn--sm btn--ghost" onclick={exitDiscard} disabled={saving} type="button">Discard edits &amp; leave</button>
         <button class="btn btn--sm btn--ghost" onclick={() => (showExitModal = false)} disabled={saving} type="button">Keep editing</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<!-- ── Restore backup modal (single-slot — button + confirm, no history list) ── -->
-{#if showRestoreModal && restoreCandidate}
-  <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="restore-title">
-    <div class="modal">
-      <h3 id="restore-title">Restore last backup?</h3>
-      <p>
-        Backup from {formatTimestamp(restoreCandidate.timestamp)}
-        ({(restoreCandidate.size / 1024).toFixed(1)} KB).
-        Your current file is snapshotted first, so this is reversible.
-      </p>
-      <div class="modal__actions">
-        <button class="btn btn--sm btn--ghost" onclick={cancelRestoreBackup} type="button">Cancel</button>
-        <button class="btn btn--sm btn--danger" onclick={confirmRestoreBackup} type="button">Restore</button>
       </div>
     </div>
   </div>

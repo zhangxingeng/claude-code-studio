@@ -1,8 +1,7 @@
 <script lang="ts">
   /**
    * SaveRail.svelte — the floating right-edge save bar. Shows the unsaved-change
-   * count and Save / Save-as-copy / Discard when dirty; Restore backup is
-   * always available (single-slot backup — no version picker). Pure controls —
+   * count and Save / Save-as-copy / Discard when dirty. Pure controls —
    * all side effects run in the parent's callbacks.
    */
   let {
@@ -12,7 +11,6 @@
     onSave,
     onSaveCopy,
     onDiscard,
-    onRestoreBackup,
   }: {
     dirty: boolean;
     changeCount: number;
@@ -20,7 +18,6 @@
     onSave: () => void;
     onSaveCopy: () => void;
     onDiscard: () => void;
-    onRestoreBackup: () => void;
   } = $props();
 </script>
 
@@ -33,7 +30,6 @@
       <button class="btn btn--sm btn--ghost" onclick={onDiscard} disabled={saving} type="button">Discard</button>
     </div>
   {/if}
-  <button class="save-rail__history" onclick={onRestoreBackup} disabled={saving} type="button" title="Restore the last backup">Restore backup</button>
 </div>
 
 <style>
@@ -50,10 +46,4 @@
     font-size: 0.68rem; font-weight: 600; color: var(--accent-user); text-align: center; margin-bottom: 0.1rem;
   }
   .save-rail__card .btn { width: 100%; justify-content: center; }
-  .save-rail__history {
-    align-self: flex-end; font-size: 0.68rem; padding: 0.25rem 0.55rem;
-    background: var(--bg-card); border: 1px solid var(--border); border-radius: 0.4rem;
-    color: var(--text-muted); cursor: pointer; opacity: 0.7;
-  }
-  .save-rail__history:hover { opacity: 1; color: var(--text); }
 </style>
