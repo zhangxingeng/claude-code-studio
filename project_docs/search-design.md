@@ -149,9 +149,9 @@ already correct once the backend actually populated the count it depends on.
 
 **Shared-engine question (prompt library, issue #7)**: prompt-library search has a different tradeoff
 profile (small volume, quality/intent over performance) and is **not** sharing this tantivy engine —
-see `project_docs/prompt-library-design.md` §F2 for its own (local-embedding-based) approach. Chat
-search and prompt search are deliberately two separate engines, not one abstraction forced to fit
-both.
+see [issue #7's design comment](https://github.com/zhangxingeng/ccdeck/issues/7#issuecomment-4910536711)
+§F2 for its own (local-embedding-based) approach. Chat search and prompt search are deliberately two
+separate engines, not one abstraction forced to fit both.
 
 ---
 

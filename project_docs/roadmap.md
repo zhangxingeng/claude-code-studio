@@ -469,19 +469,15 @@ none of these are committed work — each needs its own design pass before becom
   or a single chat panel scoped to the currently-open tier. Needs a design pass on UX (where the
   entry point lives) and on how it calls out to Claude (local `claude` CLI shellout? API key?)
   before any implementation starts.
-- **Selective / smarter chat compaction.** A finer-grained alternative to Claude Code's raw
-  `/compact` for editing session history — let a user selectively condense or drop irrelevant
-  chunks of a long conversation rather than an all-or-nothing compact, aimed at complex sessions
-  where blanket compaction loses detail that still matters. Founder is unsure this is worth the
-  complexity ("actually that would be too complex... maybe not, I don't know yet") — flagged as
-  worth exploring, not worth building yet. **Now fleshed out in
-  `project_docs/future/conversation-compactor.md`** — the key unlock is that Claude Code's own
-  compaction keeps selected messages *verbatim* (a `preservedMessages` set) alongside the summary,
-  so a non-destructive, append-only selective compactor is simpler than it first looked (and does
-  *not* depend on the edit/undo/backup infrastructure the viewer-trim work removes).
-- Both ideas sit under the same theme as Phase 2/3: **embedding real AI assistance into the control
-  center itself**, not just viewing/configuring Claude Code from the outside. Worth revisiting
-  together once one of them gets a concrete design.
+- **Selective / smarter chat compaction — dropped (2026-07-07).** A finer-grained alternative to
+  Claude Code's raw `/compact`, letting a user selectively condense parts of a long conversation.
+  Explored further (a design sketch lived briefly at `project_docs/future/conversation-compactor.md`)
+  but rejected: it means CC Deck writing its own compaction entries into a session file the real
+  Claude Code CLI later reads and resumes — reaching into Claude Code's own session format is out of
+  CC Deck's lane and not worth the complexity/risk it invites. Not being pursued.
+- This theme — **embedding real AI assistance into the control center itself**, not just viewing/
+  configuring Claude Code from the outside — is still open via the "Ask Claude" idea above; worth
+  revisiting once that one gets a concrete design.
 
 ## Release history
 
