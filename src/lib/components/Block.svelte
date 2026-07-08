@@ -90,8 +90,21 @@
       <div class="msg__body tool-intent">{toolResultBrief(block)}</div>
     </div>
   </div>
+
+<!-- ── unknown / unsupported block — read-only placeholder chip ──────────────
+     A structural stand-in for a content element the parser doesn't model
+     (image, redacted_thinking, server_tool_use, MCP result blocks, …). It
+     is NOT invisible: it renders as a minimal chip so the user can see (and
+     soft-delete) it, never as raw JSON. ────────────────────────────────── -->
+{:else if block.blockType === 'unknown'}
+  <div class="msg msg--unknown">
+    <div class="msg__inner">
+      <div class="msg__body tool-intent unknown-chip">⬚ {block.rawType ?? 'unsupported block'}</div>
+    </div>
+  </div>
 {/if}
 
 <style>
   .tool-intent { font-family: var(--font-mono); font-size: 0.78rem; word-break: break-word; }
+  .unknown-chip { color: var(--text-faint); }
 </style>

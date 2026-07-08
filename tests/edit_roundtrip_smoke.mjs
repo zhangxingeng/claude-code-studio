@@ -33,6 +33,7 @@ const {
   blockKey, isBlockDeleted, setDeleted,
   deleteMessage, deleteThinking, deleteToolGroup, deleteBulk, undelete,
 } = await import(join(root, 'src/lib/editDraft.ts'));
+const { parseJsonl } = await import(join(root, 'src/lib/parser.ts'));
 
 let passed = 0;
 let failed = 0;
@@ -300,6 +301,104 @@ console.log('\n[delete — setDeleted is a non-cascading primitive]');
   assert(draft.deletedBlocks.size === 1, 'setDeleted marks only the given key, no cascade');
   draft = setDeleted(draft, [toolUseKey], false);
   assert(draft.deletedBlocks.size === 0, 'setDeleted unmarks cleanly');
+}
+
+// ── Block-index alignment: unhandled content types must NOT skew keys ────────
+//
+// Regression for the block-index-skew bug: the delete key is blockKey(row, i)
+// where `i` is the block's position in the PARSED entry.blocks array (that's
+// what every UI call site uses), while serializeDraft removes blocks by
+// filtering message.content at that same `i`. If the parser drops any content
+// element it doesn't model (image, redacted_thinking, server_tool_use, …),
+// entry.blocks becomes shorter than content and the two index spaces diverge —
+// deleting one block silently removes a DIFFERENT one on Save. The fix makes
+// the parser index-preserving (a 'unknown' placeholder per unmodeled element),
+// so entry.blocks is 1:1 with message.content. These tests derive the key the
+// way the UI does — parse the line, find the target block's index in
+// entry.blocks — so they'd fail against the skewed (pre-fix) parser.
+console.log('\n[delete — unhandled content type does not skew the delete index]');
+{
+  // image (unmodeled) BEFORE text — pre-fix, text parses to index 0 and the
+  // Save filter removes content[0] = the IMAGE. Post-fix, text is index 1.
+  const IMG_TEXT_LINE = JSON.stringify({
+    type: 'user',
+    uuid: 'imgtext-1',
+    message: {
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } },
+        { type: 'text', text: 'keep me' },
+      ],
+    },
+  });
+
+  // Delete the TEXT — the image must survive byte-exact.
+  {
+    const entry = parseJsonl(IMG_TEXT_LINE)[0];
+    assert(entry.blocks.length === 2, `parser keeps 1:1 with content (got ${entry.blocks.length} blocks for 2 content elements)`);
+    assert(entry.blocks[0].blockType === 'unknown' && entry.blocks[0].rawType === 'image', 'unmodeled image element becomes an unknown placeholder carrying its raw type');
+    const textBi = entry.blocks.findIndex((b) => b.blockType === 'text'); // UI-derived index
+    assert(textBi === 1, `text block index in entry.blocks is 1, aligned with content (got ${textBi})`);
+
+    let draft = buildDraft(IMG_TEXT_LINE + '\n', '/p', 0);
+    draft = deleteMessage(draft, blockKey(draft.rows['imgtext-1'], textBi));
+    const out = serializeDraft(draft);
+    const parsed = JSON.parse(out.trim());
+    assert(parsed.message.content.length === 1, `one surviving block (got ${parsed.message.content.length})`);
+    assert(parsed.message.content[0].type === 'image', 'the IMAGE survives (not accidentally deleted in the text\'s place)');
+    assert(out.includes('"data":"iVBORw0KGgo="'), 'image survives byte-exact');
+    assert(!out.includes('keep me'), 'the deleted text is actually gone');
+  }
+
+  // Mirror: delete the IMAGE (an unknown block) — the text must survive.
+  {
+    const entry = parseJsonl(IMG_TEXT_LINE)[0];
+    const imgBi = entry.blocks.findIndex((b) => b.blockType === 'unknown'); // UI-derived index
+    let draft = buildDraft(IMG_TEXT_LINE + '\n', '/p', 0);
+    // The editor routes non-text/non-thinking blocks (incl. unknown) through
+    // deleteToolGroup; an unknown block has no tool pair so it deletes alone.
+    draft = deleteToolGroup(draft, [blockKey(draft.rows['imgtext-1'], imgBi)]);
+    assert(draft.deletedBlocks.size === 1, 'deleting a lone unknown block cascades to nothing');
+    const out = serializeDraft(draft);
+    const parsed = JSON.parse(out.trim());
+    assert(parsed.message.content.length === 1 && parsed.message.content[0].type === 'text', 'the TEXT survives when the image is deleted');
+    assert(parsed.message.content[0].text === 'keep me', 'surviving text is byte-exact');
+    assert(!out.includes('iVBORw0KGgo='), 'the deleted image is actually gone');
+  }
+}
+
+// "Delete group" on a member row containing an unknown block drops the whole
+// line (all its blocks deleted → line removed), leaving no orphan.
+console.log('\n[delete — delete-group over a row with an unknown block drops the line]');
+{
+  // Pure non-text line (a toolgroup member): thinking + an unmodeled
+  // server_tool_use. Deleting the whole group marks BOTH → line dropped.
+  const GROUP_LINE = JSON.stringify({
+    type: 'assistant',
+    uuid: 'grp-1',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'pondering' },
+        { type: 'server_tool_use', id: 'st1', name: 'web_search', input: { query: 'x' } },
+      ],
+    },
+  });
+  const KEEP_LINE = JSON.stringify({ type: 'user', uuid: 'keep-1', message: { role: 'user', content: 'still here' } });
+  const raw = GROUP_LINE + '\n' + KEEP_LINE + '\n';
+
+  const entry = parseJsonl(GROUP_LINE)[0];
+  assert(entry.blocks.length === 2 && entry.blocks[1].blockType === 'unknown', 'server_tool_use is an unknown placeholder, 1:1 with content');
+
+  let draft = buildDraft(raw, '/p', 0);
+  // groupBlockKeys (UI): every block index of every member row.
+  const row = draft.rows['grp-1'];
+  const groupKeys = entry.blocks.map((_, bi) => blockKey(row, bi));
+  draft = deleteToolGroup(draft, groupKeys);
+  const out = serializeDraft(draft);
+  assert(!out.includes('grp-1') && !out.includes('server_tool_use'), 'the whole group line is dropped (no orphan half survives)');
+  assert(out.includes('still here'), 'the unrelated line is untouched');
+  assert(out.split('\n').filter((l) => l.trim()).length === 1, 'exactly one line remains');
 }
 
 // ── Summary ────────────────────────────────────────────────────────────────
