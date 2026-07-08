@@ -36,9 +36,11 @@
   let {
     onOpen,
     onJump,
+    onOpenSettings,
   }: {
     onOpen: (meta: SessionMeta) => void;
     onJump: (hit: SearchHit) => void;
+    onOpenSettings?: (cwd: string, label: string) => void;
   } = $props();
 
   // Source filter presented as three friendly groups over the low-level sources.
@@ -585,6 +587,15 @@
       <div class="project-group">
         <div class="project-group__head">
           <div class="project-group__name" title={pg.project} data-copy-text={pg.project}>{pg.project}</div>
+          {#if onOpenSettings && pg.items[0]?.meta?.cwd}
+            <button
+              type="button"
+              class="project-group__settings"
+              title="Claude Code settings for this project"
+              aria-label="Claude Code settings for this project"
+              onclick={() => onOpenSettings?.(pg.items[0].meta!.cwd, pg.project)}
+            >⚙</button>
+          {/if}
         </div>
 
         {#each pg.items as sg (sg.path)}
@@ -673,6 +684,15 @@
     <div class="project-group">
       <div class="project-group__head">
         <div class="project-group__name" title={pg.project} data-copy-text={pg.project}>{pg.project}</div>
+        {#if onOpenSettings && pg.items[0]?.meta.cwd}
+          <button
+            type="button"
+            class="project-group__settings"
+            title="Claude Code settings for this project"
+            aria-label="Claude Code settings for this project"
+            onclick={() => onOpenSettings?.(pg.items[0].meta.cwd, pg.project)}
+          >⚙</button>
+        {/if}
       </div>
 
       {#each pg.items as s (s.path)}

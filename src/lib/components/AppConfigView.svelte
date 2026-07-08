@@ -1,11 +1,11 @@
 <script lang="ts">
   /**
    * AppConfigView.svelte — CC Deck's own preferences page (never Claude Code's
-   * settings.json — that schema-driven editor was removed in issue #18; users
-   * hand-edit settings.json themselves now).
+   * settings.json — that schema-driven editor lives at SettingsSearchView.svelte,
+   * a separate view/entry point; see issue #18's partial reversal + #20).
    *
-   * Replaces the old header "⚙ Settings" entry point. Holds three preferences,
-   * all persisted via getAppConfig/setAppConfig to ~/.claude/.ccstudio-config.json:
+   * Holds three preferences, all persisted via getAppConfig/setAppConfig to
+   * ~/.claude/.ccstudio-config.json:
    *   - Terminal launcher choice (auto-detect, or a custom terminal command prefix)
    *   - Resume-launch command: a fully custom, multi-line-capable shell script,
    *     run with CCDECK_SESSION_ID / CCDECK_SESSION_TITLE / CCDECK_CWD exported
@@ -14,8 +14,8 @@
    *     for updates" button always runs regardless of this toggle).
    *
    * This is a single global-scope page — launch command / terminal / update
-   * toggle are app-level preferences, not per-project, so (unlike the removed
-   * SettingsView) there is no project-cwd scoping here.
+   * toggle are app-level preferences, not per-project, so (unlike
+   * SettingsSearchView) there is no project-cwd scoping here.
    */
   import { onMount } from 'svelte';
   import type { AppConfig } from '$lib/types';

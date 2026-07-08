@@ -2,7 +2,10 @@
   /**
    * +page.svelte — top-level SPA shell for CC Deck (Claude Code Control Center).
    *
-   * States: browse | viewer | appconfig — search lives inside browse (BrowseView.svelte)
+   * States: browse | viewer | appconfig | settings — search lives inside browse
+   * (BrowseView.svelte). "appconfig" is CC Deck's own preferences; "settings" is
+   * Claude Code's own settings.json, scoped to a project (or user/global — see
+   * settingsProjectCwd below).
    * Orchestrates: session loading, HTML export, theme toggle.
    */
   import { onMount, tick } from 'svelte';
@@ -21,6 +24,7 @@
   import SessionView from '$lib/components/SessionView.svelte';
   import SessionEditor from '$lib/components/SessionEditor.svelte';
   import AppConfigView from '$lib/components/AppConfigView.svelte';
+  import SettingsSearchView from '$lib/components/SettingsSearchView.svelte';
 
   // Inline app.css for the standalone HTML export.
   import appCss from '../app.css?inline';
@@ -28,7 +32,10 @@
   // ── app state ─────────────────────────────────────────────────────────────
   // 'browse' is the home view — it merges what used to be separate Browse and
   // Search pages/views into one (see BrowseView.svelte).
-  let view = $state<'browse' | 'viewer' | 'appconfig'>('browse');
+  let view = $state<'browse' | 'viewer' | 'appconfig' | 'settings'>('browse');
+  // Settings view scope: null = user/global; otherwise a specific project's real cwd.
+  let settingsProjectCwd = $state<string | null>(null);
+  let settingsProjectLabel = $state('');
   let current = $state<Session | null>(null);
   let loading = $state(false);
   let loadError = $state<string | null>(null);
@@ -140,6 +147,15 @@
     loadError = null;
   }
 
+  // Open Settings (Claude Code's own settings.json): cwd=null for user/global;
+  // a real project cwd scopes it to that project's Local/Workspace/User tiers.
+  function goSettings(cwd: string | null, label = ''): void {
+    settingsProjectCwd = cwd;
+    settingsProjectLabel = label;
+    view = 'settings';
+    loadError = null;
+  }
+
   function backToBrowse(): void {
     view = 'browse';
     current = null;
@@ -169,8 +185,8 @@
       return;
     }
     // Not on browse yet — flag it so whichever path lands us back on browse
-    // (dirty-guarded exit from the viewer, or a plain App Config close) focuses
-    // the search input once it actually mounts.
+    // (dirty-guarded exit from the viewer, or a plain App Config/Settings close)
+    // focuses the search input once it actually mounts.
     focusSearchPending = true;
     if (view === 'viewer') handleBack();
     else backToBrowse();
@@ -277,10 +293,13 @@ ${contentHtml}
 
   <div class="app-header__actions">
     {#if view === 'browse'}
+      <button class="btn btn--ghost btn--sm" onclick={() => goSettings(null)} type="button">
+        ⚙ Settings
+      </button>
       <button class="btn btn--ghost btn--sm" onclick={goAppConfig} type="button">
         ⚙ App Config
       </button>
-    {:else if view === 'appconfig'}
+    {:else if view === 'appconfig' || view === 'settings'}
       <button class="btn btn--ghost btn--sm" onclick={backToBrowse} type="button">
         ← Back
       </button>
@@ -321,9 +340,11 @@ ${contentHtml}
   {:else if loading}
     <div class="empty-state">Loading session...</div>
   {:else if view === 'browse'}
-    <BrowseView onOpen={openSession} onJump={openHit} />
+    <BrowseView onOpen={openSession} onJump={openHit} onOpenSettings={goSettings} />
   {:else if view === 'appconfig'}
     <AppConfigView onClose={backToBrowse} />
+  {:else if view === 'settings'}
+    <SettingsSearchView projectCwd={settingsProjectCwd} projectLabel={settingsProjectLabel} onClose={backToBrowse} />
   {:else if view === 'viewer' && current}
     <SessionEditor
       path={current.meta.sourcePath}

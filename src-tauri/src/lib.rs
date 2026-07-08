@@ -11,6 +11,9 @@ mod search;
 // CC Deck's own preference store (terminal launcher choice + resume-launch command).
 mod appconfig;
 
+// Claude Code's own settings.json (schema-driven read/merge/conflict/write across tiers).
+mod settings;
+
 // ---------------------------------------------------------------------------
 // Return-type structs (must match the JS contract in ARCHITECTURE.md)
 // ---------------------------------------------------------------------------
@@ -898,6 +901,8 @@ pub fn run() {
             search::state::search,
             search::state::refresh_index,
             search::state::index_status,
+            settings::read_claude_settings,
+            settings::write_claude_settings,
             appconfig::get_app_config,
             appconfig::set_app_config,
         ]);

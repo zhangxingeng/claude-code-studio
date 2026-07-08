@@ -483,6 +483,72 @@ no smoke test touched the removed/changed surface. `pnpm build`: clean productio
 the Chrome browser-automation extension wasn't connected in the sandbox this was built in, same gap
 noted for Phase 6/7's live-verification steps. Founder should do a visual pass before shipping.
 
+## Phase 13 — Partial reversal of #18: schema-driven settings backend restored + search-and-popover frontend (DONE, resolves #20, amends #18)
+
+Phase 12 removed the schema-driven `settings.json` editor entirely with no replacement UI, on the
+call that "schema-driven editing is useless." The founder revisited that immediately after shipping:
+the real complaint was never the read/merge/conflict/write mechanism — it was the always-visible
+~125-field form (`SettingsView.svelte`) that nobody wanted to navigate. This phase restores the
+backend/schema/types verbatim and replaces the deleted form with a much smaller frontend: a fuzzy
+search box over the schema's top-level properties plus a popover that edits exactly one field at a
+time. It **resolves #20 in its expanded shape and amends #18** — the backend removal from #18 stands
+corrected; the frontend removal stands as originally shipped (a *different*, smaller frontend
+replaces it, not the old one).
+
+- **Restored unchanged (verbatim from `940d66f~1`, before #18 deleted it):**
+  `src-tauri/src/settings.rs` (tier read/merge/conflict-detection/optimistic-write-guard, 12 unit
+  tests), `src/lib/schema/claude-code-settings.json` (vendored ~190KB Claude Code settings schema),
+  `mod settings` + its two command registrations in `lib.rs`, and the matching `types.ts`
+  (`SettingsTier`/`SettingsTierData`/`SettingsConflictValue`/`SettingsConflict`/`ClaudeSettings`) /
+  `api.ts` (`readClaudeSettings`/`writeClaudeSettings`/`isSettingsConflict` + dev-mode mock shims)
+  surface. None of this changed shape from before #18 — the read/merge/conflict/write mechanism was
+  never the problem.
+- **New frontend — `SettingsSearchView.svelte`:** header (title, scope, Close — same
+  `.appconfig-head`-style pattern as `AppConfigView.svelte`) → a single search input that fuzzy-
+  filters the schema's ~125 top-level properties client-side on every keystroke (substring-on-key
+  ranks highest, substring-on-description next, no match excluded; capped at 30 results — no search
+  index, no tantivy, this is 125 short strings) → a candidate list (key, truncated description, a dot
+  if set in any tier) → clicking a row opens a popover for that key alone. The popover shows the
+  key + full schema description, a Local/Workspace/User tier radio (labelled "Workspace" in the UI;
+  the underlying `SettingsTier` type/API keeps `'project'` — no backend rename), the same
+  `widgetKind` schema-driven widget mapping `SettingsView` used (boolean/enum/string/number/
+  comma-separated array/JSON-textarea fallback), an optional one-line "Also set in `<tier>`: `<value>`"
+  hint reusing the backend's existing `conflicts` array, and Save / Clear / Cancel. Save and Clear
+  both write via `writeClaudeSettings` with that tier's `raw` as `baseVersion` (the existing
+  optimistic-concurrency guard); a refused write surfaces `isSettingsConflict` as a dismissible
+  "reload" message, same as before. Never renders more than one field at once — the all-125-visible
+  form stays deleted.
+- **Two entry points, both restored/added per the founder's explicit call:** the per-project gear
+  icon in `BrowseView.svelte` (`onOpenSettings` prop + both project-group gear-icon blocks, restored
+  from `940d66f~1` without touching the unrelated App Config changes made since — `doResume`'s
+  `title` param, etc. — that landed in the same file) plus its `.project-group__settings` CSS in
+  `app.css`; and a new global "⚙ Settings" header button in `+page.svelte` alongside the existing
+  "⚙ App Config" one. `view` gained a fourth state (`'settings'`), and `settingsProjectCwd`/
+  `settingsProjectLabel` (removed alongside `SettingsView`) are back for scoping. With no project
+  context (the global entry point), the popover shows only "User" — Local/Workspace need a project
+  cwd that doesn't exist in that scope.
+- `AppConfigView.svelte`'s header comment (which said the schema-driven editor "was removed... users
+  hand-edit settings.json themselves now") was updated — that's no longer accurate now that
+  `SettingsSearchView` exists as a separate view/entry point. The two views stay distinct: App Config
+  is CC Deck's own prefs, Settings is Claude Code's `settings.json` — consistent with how #18/#19
+  already drew that line.
+- **Independent audit found and fixed two issues in `SettingsSearchView.svelte`:** (1) MEDIUM — the
+  popover never read a tier's `parseError`, so editing a key in a tier whose on-disk JSON was
+  currently invalid would spread `{...null}` and silently overwrite the rest of that file on Save;
+  fixed by surfacing `parseError` as a warning and disabling the field/Save/Clear (via a `<fieldset
+  disabled>`) for that tier. (2) LOW — the popover wasn't focused on open, so Escape only worked
+  once a child input already had focus; fixed with a focus-on-open `$effect`. Both re-verified clean
+  (`pnpm check` 0/0, `cargo test --lib` 47/47).
+
+### Verification (Phase 13)
+
+`cargo test --lib`: 47/47 passing (12 restored `settings` module tests + the 35 already covering
+search/appconfig/session-scan/resume, unchanged). `pnpm check`: 0 errors, 0 warnings across 223
+files. `pnpm build`: clean production build. **Not performed:** live GUI verification (search for a
+key, confirm the popover, round-trip an edit across Local/Workspace/User on a real project) — the
+Chrome browser-automation extension wasn't connected in this sandbox, the same gap noted for Phase
+6/7/12. Founder should do a visual pass before shipping.
+
 ## Verification performed
 
 - `cargo test --lib` (src-tauri): 30/30 passing.
