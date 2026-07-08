@@ -31,6 +31,7 @@
     restoreBackup,
     forkSession,
     resumeInTerminal,
+    getAppConfig,
   } from '$lib/api';
   import { copyToClipboard } from '$lib/copy';
   import { resumeCommand } from '$lib/resume';
@@ -289,7 +290,8 @@
     try {
       const forked = await forkSession(path, row.originalIndex);
       const cwd = sessionInfo?.cwd ?? '';
-      await copyToClipboard(resumeCommand(cwd, forked.id));
+      const { launchCommand } = await getAppConfig();
+      await copyToClipboard(resumeCommand(cwd, forked.id, displayTitle, launchCommand));
       try {
         await resumeInTerminal(cwd, forked.id, displayTitle);
         showToast('Forked session — opened in a terminal, command also copied to clipboard');
