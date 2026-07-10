@@ -69,7 +69,7 @@ restore_backup(backup_path) -> string
 ```
 
 As of issue #6 (Phase B: plain edit surface), there is no crash-safe autosave
-draft. Editing is plain edit-in-place -> Save: `editDraft.ts`'s `Draft` holds
+draft. Editing is plain edit-in-place -> Save: [`editDraft.ts`](src/lib/editDraft.ts)'s `Draft` holds
 each row's original line plus its current (possibly edited) value entirely
 in memory, and `write_session` is the only path that touches disk for an
 edit. The editor's "Restore backup" affordance is a single button + confirm
@@ -79,9 +79,9 @@ above — there is only ever one backup file per session.
 Rust crates to add: `dirs` (home dir), `serde`/`serde_json` (already present),
 `walkdir` optional. Register all commands in `invoke_handler`. Capabilities:
 the commands are custom (`#[tauri::command]`) so no extra ACL entries are needed
-beyond `core:default` already in capabilities/default.json.
+beyond `core:default` already in [`capabilities/default.json`](src-tauri/capabilities/default.json).
 
-## JS data model (src/lib/types.ts) — ported from the old docs/app.js
+## JS data model ([`src/lib/types.ts`](src/lib/types.ts)) — ported from the old docs/app.js
 
 Recover the reference implementation: `git show e47e27d:docs/app.js`
 Also reference (Python source of truth, in git history e47e27d):

@@ -4,7 +4,7 @@ Resolves issue #17. Records ccdeck's actual multi-agent posture so the next read
 re-discover the gap the issue flagged.
 
 **Posture: not solo-agent-only, but not concurrently-self-claiming either.** Phase 14
-(`project_docs/roadmap.md`, "Phase 14 — Editor simplification…") already ran three teammates
+([`project_docs/roadmap.md`](roadmap.md), "Phase 14 — Editor simplification…") already ran three teammates
 concurrently, each worktree-isolated, under the **iterative teammate protocol**
 (`ai-first-docs/orchestration/iterative_teammate_protocol.mdx`). That is the live precedent this
 repo runs on — the lead spawns and steers each teammate explicitly through the gated
@@ -23,4 +23,4 @@ on their own.
 Revisit both if ccdeck ever adds backlog-pulling agents or a scheduled audit routine.
 
 LLM-tier bindings (`build_provider`, `audited_providers`, `cold_audit_provider`) are filled in
-`project_profile.yaml` as `"sonnet"` — the provider that actually ran the Phase 14 build.
+[`project_profile.yaml`](../project_profile.yaml) as `"sonnet"` — the provider that actually ran the Phase 14 build.

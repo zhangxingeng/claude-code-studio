@@ -1,7 +1,7 @@
 # CC Deck — Roadmap
 
 Status: **Phases 1–7 shipped through v0.7.2**, committed on `main`. This doc replaces the
-open-ended "Search Phase 2" tail in `project_docs/search-design.md` (that doc's own Phase 2 section is now
+open-ended "Search Phase 2" tail in [`project_docs/search-design.md`](search-design.md) (that doc's own Phase 2 section is now
 marked done and points here).
 
 ## Why the pivot
@@ -20,16 +20,16 @@ popular Claude Code GUI "Claudia" renaming to "Opcode") points the same directio
 
 ## Phase 1 — Rebrand to Deck (DONE)
 
-- `tauri.conf.json`: `productName` → "Deck", window title → "Deck — Claude Code Control Center",
+- [`tauri.conf.json`](../src-tauri/tauri.conf.json): `productName` → "Deck", window title → "Deck — Claude Code Control Center",
   bundle descriptions rewritten, updater endpoint repointed at the renamed repo. `identifier`
   (`com.zhangxingeng.ccstudio`) and the `.ccstudio-*` on-disk paths **deliberately left unchanged**
   — renaming those would strand existing installs from updates and orphan every user's search
   cache/backups/drafts. Cargo crate name (`ccstudio`/`ccstudio_lib`) also left as-is — internal
   only, zero user-facing value, kept the diff small.
-- `package.json` description rewritten; npm package name (`claude-code-studio`) left alone
+- [`package.json`](../package.json) description rewritten; npm package name (`claude-code-studio`) left alone
   (cosmetic, not user-facing).
-- Every other user-visible string updated: `src/routes/+page.svelte` (h1, footer), `src/app.html`
-  title, `src/app.css` header comment, `ARCHITECTURE.md` title, `.github/workflows/release.yml`
+- Every other user-visible string updated: [`src/routes/+page.svelte`](../src/routes/+page.svelte) (h1, footer), [`src/app.html`](../src/app.html)
+  title, [`src/app.css`](../src/app.css) header comment, [`ARCHITECTURE.md`](../ARCHITECTURE.md) title, [`.github/workflows/release.yml`](../.github/workflows/release.yml)
   release name.
 - **README.md fully rewritten** around the mission (hero, mission callout, personas, three feature
   pillars, privacy, FAQ, trademark disclaimer).
@@ -42,7 +42,7 @@ popular Claude Code GUI "Claudia" renaming to "Opcode") points the same directio
 The founder's real pain: Claude Code config is spread across three files and you can't tell what's
 set where.
 
-- **Backend** (`src-tauri/src/settings.rs`): `read_claude_settings(project_cwd)` reads whichever of
+- **Backend** ([`src-tauri/src/settings.rs`](../src-tauri/src/settings.rs)): `read_claude_settings(project_cwd)` reads whichever of
   `~/.claude/settings.json` (user), `<project>/.claude/settings.json` (project), and
   `<project>/.claude/settings.local.json` (local) exist; returns each tier's path/exists/raw/parsed,
   a top-level merged `effective` view, and a `conflicts` list (key set to *differing* values in ≥2
@@ -50,7 +50,7 @@ set where.
   one tier, pretty-printed, never merging. 6 unit tests (precedence, merge, conflict detection,
   user-only scope, write-creates-dir, malformed-JSON-doesn't-crash).
 - **Schema**: Claude Code's published settings JSON Schema vendored at
-  `src/lib/schema/claude-code-settings.json` (~190 KB, 125 top-level properties) so the app stays
+  [`src/lib/schema/claude-code-settings.json`](../src/lib/schema/claude-code-settings.json) (~190 KB, 125 top-level properties) so the app stays
   100% offline — no runtime fetch. **To refresh**: re-download
   `https://json.schemastore.org/claude-code-settings.json` and overwrite that file; nothing else
   needs to change unless key names change.
@@ -61,17 +61,17 @@ set where.
   "Simple" grouping (Model, Permissions, Environment, Git, Hooks, MCP, Interface — about 20 keys)
   is shown by default; a "Show advanced settings" toggle reveals the remaining ~100 keys
   alphabetically. Entry points: a "⚙ Settings" header button (global/user scope) and a per-project
-  gear next to each project's group header in `BrowseView.svelte` (resolves that project's real
+  gear next to each project's group header in [`BrowseView.svelte`](../src/lib/components/BrowseView.svelte) (resolves that project's real
   `cwd` from its sessions' `meta.cwd`).
 - Validation is render-time type coercion only (no `ajv`/JSON-Schema validator) — deferred per the
   original plan as out of scope for v1.
 
 ## Phase 3 — Configurable terminal launcher (DONE)
 
-- **`src-tauri/src/appconfig.rs`**: Deck's own tiny preference file at
+- **[`src-tauri/src/appconfig.rs`](../src-tauri/src/appconfig.rs)**: Deck's own tiny preference file at
   `~/.claude/.ccstudio-config.json` (`{ terminal, terminalArgs }`), with `get_app_config` /
   `set_app_config` commands. Falls back to defaults (auto-detect, no extra args) on any read error.
-- **`resume_in_terminal`** (`src-tauri/src/lib.rs`) generalized to load this preference: "auto"
+- **`resume_in_terminal`** ([`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs)) generalized to load this preference: "auto"
   (default, empty string) reproduces the exact original per-OS auto-detect behavior; a custom
   preference supplies a terminal command template (first token = program, rest = args preceding the
   `claude` invocation) plus optional extra CLI args appended after `--resume <id>` (e.g.
@@ -82,7 +82,7 @@ set where.
 
 ## Phase 4 — Search Phase 2 cleanup (DONE)
 
-Closes out the two items `project_docs/search-design.md` left "NOT STARTED":
+Closes out the two items [`project_docs/search-design.md`](search-design.md) left "NOT STARTED":
 
 - **Keyboard navigation**: `SearchView.svelte` tracks a `focusedIdx` over the flattened,
   collapse-aware hit list (`visibleHits`, derived from non-collapsed groups only). ↓/↑ on the
@@ -90,17 +90,17 @@ Closes out the two items `project_docs/search-design.md` left "NOT STARTED":
   new query.
 - **Tool-name filter**: `SearchFilters.toolName` (Rust `tool_name: Option<String>`) restricts to
   `tool_use` blocks whose text is exactly the tool name or starts with `"{name}\n"` (matching the
-  extraction format in `search/extract.rs`) — implemented as an escaped `LIKE ... ESCAPE '\'`
+  extraction format in [`search/extract.rs`](../src-tauri/src/search/extract.rs)) — implemented as an escaped `LIKE ... ESCAPE '\'`
   prefix match. **Overrides `sources`** rather than ANDing with it (an AND would always be empty,
   since `sources` rarely includes `tool_use` alongside a tool-name filter). Same override logic
   applied to the cold-path scanner (`passes_source_and_date`) so warm/cold tiers agree.
 - **Current-session filter**: `SearchFilters.sessionPath` (Rust `session_path: Option<String>`)
   restricts to one session file — a `WHERE b.session_path = ?` clause in the warm-path SQL, and a
-  file-skip in the cold-path directory loop (`state.rs`). Wired through `search.svelte.ts`
+  file-skip in the cold-path directory loop ([`state.rs`](../src-tauri/src/search/state.rs)). Wired through [`search.svelte.ts`](../src/lib/search.svelte.ts)
   (`sessionOnly` toggle + `currentSessionPath`, set via `initSearch(currentSessionPath)`) and a
   "This session only" checkbox in `SearchView.svelte`, shown when a `currentSessionPath` prop is
-  passed. **Gap closed in Phase 6**: `InlineSearchPanel.svelte` now calls `initSearch(sessionPath)`
-  and sets `sessionOnly = true`, mounted from `SessionEditor.svelte` (in-chat search / Ctrl+F) —
+  passed. **Gap closed in Phase 6**: [`InlineSearchPanel.svelte`](../src/lib/components/InlineSearchPanel.svelte) now calls `initSearch(sessionPath)`
+  and sets `sessionOnly = true`, mounted from [`SessionEditor.svelte`](../src/lib/components/SessionEditor.svelte) (in-chat search / Ctrl+F) —
   the "search within this session" filter has a live entry point.
 - Model/git-branch filtering remains explicitly out of scope (needs new indexed columns + a
   reindex, not requested).
@@ -127,19 +127,19 @@ later in a long conversation — which is exactly where the CLI's own `/rename` 
 the conversation currently is — wouldn't have shown up in Deck's own list either.
 
 **Fix**:
-- `src/lib/sessionOps.ts` — rename now appends real `custom-title` + `agent-name` entries
+- [`src/lib/sessionOps.ts`](../src/lib/sessionOps.ts) — rename now appends real `custom-title` + `agent-name` entries
   (mirroring exactly what the CLI's own `/rename` writes) instead of mutating the fabricated field.
   Always appends, never edits an earlier line, matching how the CLI re-asserts the current title.
-- `src-tauri/src/lib.rs` — `list_sessions`'s existing one-pass whole-file scan (already used for
+- [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs) — `list_sessions`'s existing one-pass whole-file scan (already used for
   `user_count`/`models`/`cwd` etc.) now also tracks the last-seen `customTitle`, exposed as a new
   `SessionMeta.custom_title` field, so a rename is found regardless of where in the file it lands,
   not just the 50-line preview.
-- `src/lib/components/BrowseView.svelte` prefers `custom_title` over the preview-derived guess.
-- `src/lib/parser.ts`'s `extractMeta` no longer reads the fabricated field.
+- [`src/lib/components/BrowseView.svelte`](../src/lib/components/BrowseView.svelte) prefers `custom_title` over the preview-derived guess.
+- [`src/lib/parser.ts`](../src/lib/parser.ts)'s `extractMeta` no longer reads the fabricated field.
 - Two real sessions in `juror_fullstack` had the old broken rename: `central-config` (already fixed
   by the founder's manual `/rename` workaround) and `steam-stuff` — patched directly with the
   corrected write path during this session.
-- Rewrote `tests/title_smoke.mjs` for the new append-based behavior (14/14 assertions).
+- Rewrote [`tests/title_smoke.mjs`](../tests/title_smoke.mjs) for the new append-based behavior (14/14 assertions).
   `cargo test --lib` 30/30. `pnpm check` / `pnpm build` clean.
 - **Needs an app rebuild** (`cargo tauri build`) to ship — this touches Rust (`SessionMeta`), so a
   plain frontend redeploy isn't enough.
@@ -148,27 +148,27 @@ the conversation currently is — wouldn't have shown up in Deck's own list eith
 
 Ideas raised by the founder while using the app day-to-day (2026-07-04), all shipped same day:
 
-1. **Back-to-top button.** `SessionEditor.svelte` now shows a floating bottom-right button once
+1. **Back-to-top button.** [`SessionEditor.svelte`](../src/lib/components/SessionEditor.svelte) now shows a floating bottom-right button once
    scrolled past ~600px, smooth-scrolling back to the top. Placed bottom-right (not the vertically-
    centered right edge `SaveRail` uses) so the two floating controls never overlap.
-2. **Sticky app header.** Root cause was `html, body { height: 100% }` in `app.css` capping
+2. **Sticky app header.** Root cause was `html, body { height: 100% }` in [`app.css`](../src/app.css) capping
    `.app-header`'s sticky containing block at one viewport. Fixed: only `html` gets `height: 100%`;
    `body` keeps its own `min-height: 100vh` and grows with content.
-3. **Browse's search box replaced by the global Search engine.** `BrowseView.svelte` and
+3. **Browse's search box replaced by the global Search engine.** [`BrowseView.svelte`](../src/lib/components/BrowseView.svelte) and
    `SearchView.svelte` are fully merged into one view: an always-visible advanced search bar
    (case/whole-word/regex, source/date/tool-name/project filters) sits above the project-grouped
    session list. Empty query shows the browse list unchanged; a typed query nests results
-   project → chat (by resolved title) → matching lines, reusing the same `search.svelte.ts` engine.
-   `SearchView.svelte` deleted; `+page.svelte`'s `'search'` view state removed.
-4. **Search within a single open chat.** New `InlineSearchPanel.svelte` — "find in this chat" —
-   reuses `search.svelte.ts` with `sessionOnly` forced on, a trimmed filter set (query +
+   project → chat (by resolved title) → matching lines, reusing the same [`search.svelte.ts`](../src/lib/search.svelte.ts) engine.
+   `SearchView.svelte` deleted; [`+page.svelte`](../src/routes/+page.svelte)'s `'search'` view state removed.
+4. **Search within a single open chat.** New [`InlineSearchPanel.svelte`](../src/lib/components/InlineSearchPanel.svelte) — "find in this chat" —
+   reuses [`search.svelte.ts`](../src/lib/search.svelte.ts) with `sessionOnly` forced on, a trimmed filter set (query +
    case/whole-word/regex + tool-name), and a flat hit list. Toggled via a button above the message
    list or Ctrl/Cmd+F (intercepted so the browser's own find bar never opens). Clicking a hit or
    pressing Enter scrolls straight to that message.
-5. **Chat title + inline rename inside the viewer.** New `extractCustomTitle()` (`parser.ts`) scans
+5. **Chat title + inline rename inside the viewer.** New `extractCustomTitle()` ([`parser.ts`](../src/lib/parser.ts)) scans
    the full raw file for the last real `custom-title` entry — needed because `Session.meta.title` is
    derived fresh from the first user message and has no concept of a prior rename. Shown as a
-   heading above `SessionMetaCard`, with a Rename button reusing `sessionOps.ts`'s `renameSession`.
+   heading above `SessionMetaCard`, with a Rename button reusing [`sessionOps.ts`](../src/lib/sessionOps.ts)'s `renameSession`.
    The Rename button is disabled while the session has unsaved edits, since the rename writes
    straight to disk independent of the in-memory edit draft — renaming mid-edit could otherwise let
    a later Save silently overwrite the rename, or a post-rename reload silently discard the edits.
@@ -184,15 +184,15 @@ Founder report: Ubuntu already has an unrelated `deck` apt package, and this app
 the other. Renamed the product-facing name from **Deck** to **CC Deck** to get a distinctive package
 name (`cc-deck`-shaped on Linux) that won't collide.
 
-- `tauri.conf.json`: `productName` → "CC Deck", window title → "CC Deck — Claude Code Control
+- [`tauri.conf.json`](../src-tauri/tauri.conf.json): `productName` → "CC Deck", window title → "CC Deck — Claude Code Control
   Center", updater endpoint repointed at the renamed repo, bundle `longDescription` reworded.
   `identifier` (`com.zhangxingeng.ccstudio`) and the `.ccstudio-*` on-disk paths **left unchanged
   again**, same reasoning as Phase 1 — renaming those would strand existing installs' updates and
   orphan search cache/backups/drafts. Cargo crate name (`ccstudio`/`ccstudio_lib`) and npm package
   name (`claude-code-studio`) also left alone — internal only, same call as Phase 1.
-- Every user-visible string updated: `src/routes/+page.svelte` (h1, footer + link), `src/app.html`
-  title, `src/app.css` header comment, `ARCHITECTURE.md` title, `README.md`, `CONTRIBUTING.md`,
-  issue templates, `.github/workflows/release.yml` release name, `e2e/browse.spec.ts`'s heading
+- Every user-visible string updated: [`src/routes/+page.svelte`](../src/routes/+page.svelte) (h1, footer + link), [`src/app.html`](../src/app.html)
+  title, [`src/app.css`](../src/app.css) header comment, [`ARCHITECTURE.md`](../ARCHITECTURE.md) title, [`README.md`](../README.md), [`CONTRIBUTING.md`](../CONTRIBUTING.md),
+  issue templates, [`.github/workflows/release.yml`](../.github/workflows/release.yml) release name, [`e2e/browse.spec.ts`](../e2e/browse.spec.ts)'s heading
   assertion, plus a handful of source comments referencing the product by name.
 - **GitHub repo renamed** `zhangxingeng/deck` → `zhangxingeng/ccdeck` (`gh repo rename`, confirmed
   with the founder first). GitHub keeps a redirect from the old path. Local `origin` remote updated
@@ -207,13 +207,13 @@ docs-routing subagent was migrated into this repo and wired to actually function
 
 ### get-context infra (flat-docs mode)
 
-- `project_profile.yaml` added at the repo root (previously missing) — `docs_regen_cmd`,
+- [`project_profile.yaml`](../project_profile.yaml) added at the repo root (previously missing) — `docs_regen_cmd`,
   `check_cmd`, `github_repos`. Points at a **flat-mode** doc catalog: the corpus at `ai-first-docs/`
   (a separate git repo, gitignored from ccdeck) has no Astro site wrapper, so the catalog generator
   (`ai-first-docs/.setup/site/mcp_servers/docs_catalog.py`) and the enrichment util
   (`ai-first-docs/scripts/get_context_enrich.py`) were made **content-root-aware** (root-cause fix,
   not a ccdeck-only fork) so both flat and the kit's default nested-Astro layout work off one code
-  path. `.claude/agents/get-context.md` was migrated/adapted to this project (juror_fullstack's
+  path. [`.claude/agents/get-context.md`](../.claude/agents/get-context.md) was migrated/adapted to this project (juror_fullstack's
   paths remapped to the flat layout) — **a Claude Code session restart is required** to register a
   project-level agent; `/reload-plugins` alone does not.
 - Verified end-to-end by actually dispatching `get-context` on this campaign's own build work — it
@@ -230,18 +230,18 @@ docs-routing subagent was migrated into this repo and wired to actually function
 
 `get-context`'s own routing caught that the naive "4 parallel workers" plan violated the
 file-disjoint parallelism rule (`orchestration/fix_campaign_manager_protocol`): #10 and #11 both
-touch `src-tauri/src/lib.rs`. Regrouped into two file-disjoint streams, run sequentially (not
+touch [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs). Regrouped into two file-disjoint streams, run sequentially (not
 worktree-isolated, to respect the pre-commit-stash trap) rather than concurrently:
 
 - **`fix(#8, 360e2b9)`** — stale `roadmap.md` note (Phase 4's "no live entry point" gap was closed by
-  Phase 6 — see above), a dead `toggleSessionOnly()` export in `search.svelte.ts`, and a transitive
-  `cookie@0.6.0` advisory. **Decision:** the fix moved from `package.json`'s `"pnpm"` key (as
-  originally suggested) to `pnpm-workspace.yaml`'s `overrides`, because pnpm 11.9 dropped support
+  Phase 6 — see above), a dead `toggleSessionOnly()` export in [`search.svelte.ts`](../src/lib/search.svelte.ts), and a transitive
+  `cookie@0.6.0` advisory. **Decision:** the fix moved from [`package.json`](../package.json)'s `"pnpm"` key (as
+  originally suggested) to [`pnpm-workspace.yaml`](../pnpm-workspace.yaml)'s `overrides`, because pnpm 11.9 dropped support
   for the old location — caught live rather than silently targeting stale syntax.
-- **`test(#9, 1b6ee27)`** — the `tests/*.mjs` smoke suite (~200 assertions, `parser.ts`/`builder.ts`/
-  `sessionOps.ts`/`diff.ts`/`displayModel.ts`) previously only ran via manual `npx tsx`, invisible to
+- **`test(#9, 1b6ee27)`** — the `tests/*.mjs` smoke suite (~200 assertions, [`parser.ts`](../src/lib/parser.ts)/[`builder.ts`](../src/lib/builder.ts)/
+  [`sessionOps.ts`](../src/lib/sessionOps.ts)/`diff.ts`/[`displayModel.ts`](../src/lib/displayModel.ts)) previously only ran via manual `npx tsx`, invisible to
   CI. Added a `pnpm test:smoke` script (+ pinned `tsx` devDependency), a CI step, and a
-  `CONTRIBUTING.md` checklist line.
+  [`CONTRIBUTING.md`](../CONTRIBUTING.md) checklist line.
 - **`fix(#10, 2e35c44)`** — `list_sessions`'s hand-rolled JSONL scanner (`json_str_after`) mangled
   `\uXXXX`/`\/` escapes and wasn't scoped to the top level (a nested `"type":"..."` substring could
   misclassify a line). **Decision: replaced with `serde_json`** (already a direct dependency) parsing
@@ -263,9 +263,9 @@ worktree-isolated, to respect the pre-commit-stash trap) rather than concurrentl
 
 The founder asked to simplify session-file backups from an unbounded version history (`vNNN-*.jsonl`
 per edit, forever) to **exactly one overwritten backup slot per session**, refreshed **only** on an
-explicit Save-confirm in `SessionEditor.svelte` — not automatically from any other write path. This
+explicit Save-confirm in [`SessionEditor.svelte`](../src/lib/components/SessionEditor.svelte) — not automatically from any other write path. This
 **reverted part of #11**: `ensure_snapshotted`'s automatic call inside `write_session` had
-unintentionally given `sessionOps.ts`'s `renameSession` a backup it deliberately never wanted
+unintentionally given [`sessionOps.ts`](../src/lib/sessionOps.ts)'s `renameSession` a backup it deliberately never wanted
 ("low-stakes", per its own comment). `ensure_snapshotted` was removed entirely; `snapshot_at` now
 clears the session's backup directory before writing the single new file, so `list_backups`
 naturally returns 0 or 1 entries with **no type/API change** (the frontend's existing `{#each}` loop
@@ -274,10 +274,10 @@ handles that generically). The settings RMW guard from #11 is unrelated and was 
 **This also corrected issue #6** (chat-viewer trim), which had specced *removing* the backup
 mechanism entirely — now updated to say keep the single-slot backup (already implemented, not part
 of that future teardown), with one open call flagged for whoever picks up #6: whether
-`SessionEditor.svelte`'s restore-UI (`showHistoryModal`) survives as a user-facing affordance, or the
+[`SessionEditor.svelte`](../src/lib/components/SessionEditor.svelte)'s restore-UI (`showHistoryModal`) survives as a user-facing affordance, or the
 backup becomes a purely silent safety net.
 
-### Standing preference (recorded in `.claude/memory/MEMORY.md`)
+### Standing preference (recorded in [`.claude/memory/MEMORY.md`](../.claude/memory/MEMORY.md))
 
 Always target the latest toolchain/dependency versions — fix forward (`pnpm upgrade --latest`,
 `cargo update`, `rustup update`), don't code around an older one. A broad dependency bump is still
@@ -295,16 +295,16 @@ done.
 
 Closes **#6**. Built directly (founder: "we dont want complex feature... removing is the right call"),
 across 3 sequential subagent dispatches (sequential, not parallel, because the phases share hot files —
-`displayModel.ts`, `MessageCell.svelte`, `SessionEditor.svelte` — so concurrent writers would've hit the
+[`displayModel.ts`](../src/lib/displayModel.ts), [`MessageCell.svelte`](../src/lib/components/MessageCell.svelte), [`SessionEditor.svelte`](../src/lib/components/SessionEditor.svelte) — so concurrent writers would've hit the
 pre-commit-stash trap). Each phase independently re-verified by me before the next was dispatched.
 
 - **Phase A (`5b341bd`)** — removed `thinking` and `tool_use`/`tool_result` rendering entirely: deleted
-  `ToolGroup.svelte`, the corresponding `Block.svelte` branches (including the subagent "Open →"
+  [`ToolGroup.svelte`](../src/lib/components/ToolGroup.svelte), the corresponding [`Block.svelte`](../src/lib/components/Block.svelte) branches (including the subagent "Open →"
   affordance — intentionally dropped, not carved out, since there's no tool-call block left to click
-  through from), the `DisplayToolGroup` half of `displayModel.ts`, and the matching parse/build/type
-  surface (`parser.ts`/`builder.ts`/`types.ts`). Display model is now user/assistant text only.
-- **Phase B (`313d52c`)** — replaced the per-row version-stack edit model (`editDraft.ts`'s
-  `versions[]`/`active`, `diff.ts`, `DiffView.svelte`, the `MessageCell.svelte` diff/history toolbar,
+  through from), the `DisplayToolGroup` half of [`displayModel.ts`](../src/lib/displayModel.ts), and the matching parse/build/type
+  surface ([`parser.ts`](../src/lib/parser.ts)/[`builder.ts`](../src/lib/builder.ts)/[`types.ts`](../src/lib/types.ts)). Display model is now user/assistant text only.
+- **Phase B (`313d52c`)** — replaced the per-row version-stack edit model ([`editDraft.ts`](../src/lib/editDraft.ts)'s
+  `versions[]`/`active`, `diff.ts`, `DiffView.svelte`, the [`MessageCell.svelte`](../src/lib/components/MessageCell.svelte) diff/history toolbar,
   the crash-safe draft autosave loop and Rust `read_edit_draft`/`write_edit_draft`/`delete_edit_draft`/
   `edit_draft_path`) with plain edit-in-place → save. **The single-slot backup mechanism
   (`snapshot`/`list_backups`/`restore_backup`/`BackupVersion`) was explicitly kept, untouched** — that's
@@ -319,8 +319,8 @@ pre-commit-stash trap). Each phase independently re-verified by me before the ne
   `subagent-stack.spec.ts`, `tool-input-popover.spec.ts`). Left `subagent_count` (the BrowseView "N
   subagents" badge) untouched — separate, still-used metadata, not part of the drilldown feature.
 
-### Standing preference this prompted (recorded in `.claude/memory/MEMORY.md` and
-`ai-first-docs/craft/team/user_preferences_reference.mdx`)
+### Standing preference this prompted (recorded in [`.claude/memory/MEMORY.md`](../.claude/memory/MEMORY.md) and
+`ai-first-docs/craft/workflow/user_preferences_reference.mdx`)
 
 Cut features people don't actually use, even ones that took real effort to build — a smaller surface
 that's all genuinely used beats a larger one padded with idle machinery. This issue is the worked
@@ -338,7 +338,7 @@ that the dead subsystem left zero references and `subagent_count` was not over-d
 
 ## Phase 10 — Fuzzy/intent search engine: tantivy replaces regex/SQLite matcher (DONE, 2026-07-07)
 
-Closes **#5**. Full design rationale lives in `project_docs/search-design.md`'s "v2 — Fuzzy/intent
+Closes **#5**. Full design rationale lives in [`project_docs/search-design.md`](search-design.md)'s "v2 — Fuzzy/intent
 search redesign" section — this entry is the build record, not a design restatement.
 
 - **Backend (`40b0d38`)** — replaced the `regex`-crate substring/whole-word/regex scan and the
@@ -346,7 +346,7 @@ search redesign" section — this entry is the build record, not a design restat
   query per token (exact/near-exact still ranks above loosely-fuzzy), and an `ENGINE_VERSION` marker
   forcing one full rebuild for existing users' stale v1 cache so nobody upgrades into an empty index.
 - **Frontend (`deccec6`)** — removed the case/whole-word/regex toggle UI entirely (no geek-mode gate)
-  from `BrowseView.svelte` and `InlineSearchPanel.svelte`; `SearchOpts` deleted from `types.ts`;
+  from [`BrowseView.svelte`](../src/lib/components/BrowseView.svelte) and [`InlineSearchPanel.svelte`](../src/lib/components/InlineSearchPanel.svelte); `SearchOpts` deleted from [`types.ts`](../src/lib/types.ts);
   `SearchHit` gained a `score` field for the engine's relevance ranking.
 - **Gate-2 audit + fixes (`66c1fc0`)** — three independent audits (contract consistency, migration
   data-safety, relevance correctness) ran before calling the feature done, and found real bugs a
@@ -383,7 +383,7 @@ Two unrelated bugs, fixed and committed separately.
 
 ### #12 — cross-process migration race (`5b69b7b`)
 
-`ensure_engine_version` (`search/db.rs`) does the destructive wipe-and-reset described in Phase 10's
+`ensure_engine_version` ([`search/db.rs`](../src-tauri/src/search/db.rs)) does the destructive wipe-and-reset described in Phase 10's
 follow-up note with no protection across processes. **Decision: a cross-process file lock, not
 `tauri-plugin-single-instance`** — the plugin route was considered but rejected because
 `SearchState::new()` (which calls `ensure_engine_version`) runs before the Tauri builder/plugin
@@ -399,7 +399,7 @@ never acquires before the holder releases.
 
 Founder report: editing a chat message produced a file Claude Code (the real CLI) no longer
 recognized — the session read back blank. **Root-caused with tests, not inspection** — a new
-adversarial round-trip suite (`tests/edit_roundtrip_smoke.mjs`) fuzzing `editDraft.ts` against
+adversarial round-trip suite ([`tests/edit_roundtrip_smoke.mjs`](../tests/edit_roundtrip_smoke.mjs)) fuzzing [`editDraft.ts`](../src/lib/editDraft.ts) against
 deliberately hostile fixtures (duplicate uuids, integers past 2^53, unpaired UTF-16 surrogates,
 numeric-looking object keys) found two independent, real corruption bugs on the first run:
 
@@ -413,11 +413,11 @@ numeric-looking object keys) found two independent, real corruption bugs on the 
    edited line, not just the field actually touched. Confirmed: a sibling field of `9223372036854775807`
    became `9223372036854776000` after an unrelated text edit. **Fixed by adopting the
    [`lossless-json`](https://www.npmjs.com/package/lossless-json) library** (new dependency) in place
-   of every `JSON.parse`/`JSON.stringify` call in `editDraft.ts` — it preserves untouched numbers
+   of every `JSON.parse`/`JSON.stringify` call in [`editDraft.ts`](../src/lib/editDraft.ts) — it preserves untouched numbers
    byte-for-byte through the round trip. Side effect (intentional): its parser rejects duplicate JSON
    keys within one line instead of native JSON's silent last-key-wins — stricter, not more permissive.
 
-`tests/edit_roundtrip_smoke.mjs` is now part of `pnpm test:smoke` permanently, checking two
+[`tests/edit_roundtrip_smoke.mjs`](../tests/edit_roundtrip_smoke.mjs) is now part of `pnpm test:smoke` permanently, checking two
 properties against both the real fixture and the adversarial ones: **identity round trip** (build →
 serialize with zero edits must reproduce the raw file byte-for-byte) and **edit fidelity** (editing
 one field must leave every sibling field byte/value-identical).
@@ -438,23 +438,23 @@ Playwright, unrelated to this change; founder should run the e2e suite before sh
 Closes **#18** and **#19**, built together in one pass (per #19's own note: "coordinate with #18 ...
 either land together or keep a stopgap entry point" — landing together avoided ever leaving Resume
 without a working launch mechanism, and avoided merge friction since both issues touch the same
-files: the header entry-point button, `appconfig.rs`, `lib.rs`'s `resume_in_terminal`).
+files: the header entry-point button, [`appconfig.rs`](../src-tauri/src/appconfig.rs), [`lib.rs`](../src-tauri/src/lib.rs)'s `resume_in_terminal`).
 
 - **Removed (#18)** — the schema-driven Claude Code `settings.json` editor, entirely, no
-  replacement UI: `SettingsView.svelte` (501 lines), `src-tauri/src/settings.rs` (544 lines) and its
-  `mod settings`/command registrations, the vendored ~190KB `src/lib/schema/claude-code-settings.json`,
-  and the matching `api.ts`/`types.ts` surface (`readClaudeSettings`/`writeClaudeSettings`/
+  replacement UI: `SettingsView.svelte` (501 lines), [`src-tauri/src/settings.rs`](../src-tauri/src/settings.rs) (544 lines) and its
+  `mod settings`/command registrations, the vendored ~190KB [`src/lib/schema/claude-code-settings.json`](../src/lib/schema/claude-code-settings.json),
+  and the matching [`api.ts`](../src/lib/api.ts)/[`types.ts`](../src/lib/types.ts) surface (`readClaudeSettings`/`writeClaudeSettings`/
   `isSettingsConflict`/the dev-mode settings shims, `SettingsTier`/`SettingsTierData`/
   `SettingsConflictValue`/`SettingsConflict`/`ClaudeSettings`). Users hand-edit `settings.json`
   themselves now — same "lean beats impressive-and-idle" call already made for the chat-viewer diff
   machinery in Phase 9.
-- **Added (#19)** — `AppConfigView.svelte`, a single global-scope page (launch command / terminal /
+- **Added (#19)** — [`AppConfigView.svelte`](../src/lib/components/AppConfigView.svelte), a single global-scope page (launch command / terminal /
   update toggle are app-level preferences, not per-project) replacing the removed "⚙ Settings" header
   button with "⚙ App Config". Holds: the existing terminal-launcher preference (unchanged semantics),
   a new fully-custom `launch_command` (multi-line-capable, defaults to
   `claude --resume "$CCDECK_SESSION_ID"`, with two starter presets — plain and a `tmux new-session`
   example), and a new `update_check_on_launch` toggle (defaults `true`, gating only the silent
-  launch-time check in `+layout.svelte`; the footer's manual "Check for updates" stays ungated).
+  launch-time check in [`+layout.svelte`](../src/routes/+layout.svelte); the footer's manual "Check for updates" stays ungated).
 - **Env-var launch mechanism** — `resume_in_terminal` now exports `CCDECK_SESSION_ID`,
   `CCDECK_SESSION_TITLE`, `CCDECK_CWD` into the launched command's environment instead of splicing
   a session id into a hardcoded `claude --resume <id> <extra-args>` string. `terminal_args` is
@@ -470,7 +470,7 @@ files: the header entry-point button, `appconfig.rs`, `lib.rs`'s `resume_in_term
   gained a `session_title` parameter, threaded through from all three call sites
   (`+page.svelte::resumeSession`, `BrowseView.svelte::doResume`, `SessionEditor.svelte::doResumeFrom`)
   reusing each component's existing display-title value.
-- Per-project settings gear icon in `BrowseView.svelte` (two near-identical blocks) was deleted, not
+- Per-project settings gear icon in [`BrowseView.svelte`](../src/lib/components/BrowseView.svelte) (two near-identical blocks) was deleted, not
   relocated — App Config has no per-project analog.
 
 ### Verification (Phase 12)
@@ -496,15 +496,15 @@ corrected; the frontend removal stands as originally shipped (a *different*, sma
 replaces it, not the old one).
 
 - **Restored unchanged (verbatim from `940d66f~1`, before #18 deleted it):**
-  `src-tauri/src/settings.rs` (tier read/merge/conflict-detection/optimistic-write-guard, 12 unit
-  tests), `src/lib/schema/claude-code-settings.json` (vendored ~190KB Claude Code settings schema),
-  `mod settings` + its two command registrations in `lib.rs`, and the matching `types.ts`
+  [`src-tauri/src/settings.rs`](../src-tauri/src/settings.rs) (tier read/merge/conflict-detection/optimistic-write-guard, 12 unit
+  tests), [`src/lib/schema/claude-code-settings.json`](../src/lib/schema/claude-code-settings.json) (vendored ~190KB Claude Code settings schema),
+  `mod settings` + its two command registrations in [`lib.rs`](../src-tauri/src/lib.rs), and the matching [`types.ts`](../src/lib/types.ts)
   (`SettingsTier`/`SettingsTierData`/`SettingsConflictValue`/`SettingsConflict`/`ClaudeSettings`) /
-  `api.ts` (`readClaudeSettings`/`writeClaudeSettings`/`isSettingsConflict` + dev-mode mock shims)
+  [`api.ts`](../src/lib/api.ts) (`readClaudeSettings`/`writeClaudeSettings`/`isSettingsConflict` + dev-mode mock shims)
   surface. None of this changed shape from before #18 — the read/merge/conflict/write mechanism was
   never the problem.
-- **New frontend — `SettingsSearchView.svelte`:** header (title, scope, Close — same
-  `.appconfig-head`-style pattern as `AppConfigView.svelte`) → a single search input that fuzzy-
+- **New frontend — [`SettingsSearchView.svelte`](../src/lib/components/SettingsSearchView.svelte):** header (title, scope, Close — same
+  `.appconfig-head`-style pattern as [`AppConfigView.svelte`](../src/lib/components/AppConfigView.svelte)) → a single search input that fuzzy-
   filters the schema's ~125 top-level properties client-side on every keystroke (substring-on-key
   ranks highest, substring-on-description next, no match excluded; capped at 30 results — no search
   index, no tantivy, this is 125 short strings) → a candidate list (key, truncated description, a dot
@@ -519,20 +519,20 @@ replaces it, not the old one).
   "reload" message, same as before. Never renders more than one field at once — the all-125-visible
   form stays deleted.
 - **Two entry points, both restored/added per the founder's explicit call:** the per-project gear
-  icon in `BrowseView.svelte` (`onOpenSettings` prop + both project-group gear-icon blocks, restored
+  icon in [`BrowseView.svelte`](../src/lib/components/BrowseView.svelte) (`onOpenSettings` prop + both project-group gear-icon blocks, restored
   from `940d66f~1` without touching the unrelated App Config changes made since — `doResume`'s
   `title` param, etc. — that landed in the same file) plus its `.project-group__settings` CSS in
-  `app.css`; and a new global "⚙ Settings" header button in `+page.svelte` alongside the existing
+  [`app.css`](../src/app.css); and a new global "⚙ Settings" header button in [`+page.svelte`](../src/routes/+page.svelte) alongside the existing
   "⚙ App Config" one. `view` gained a fourth state (`'settings'`), and `settingsProjectCwd`/
   `settingsProjectLabel` (removed alongside `SettingsView`) are back for scoping. With no project
   context (the global entry point), the popover shows only "User" — Local/Workspace need a project
   cwd that doesn't exist in that scope.
-- `AppConfigView.svelte`'s header comment (which said the schema-driven editor "was removed... users
+- [`AppConfigView.svelte`](../src/lib/components/AppConfigView.svelte)'s header comment (which said the schema-driven editor "was removed... users
   hand-edit settings.json themselves now") was updated — that's no longer accurate now that
   `SettingsSearchView` exists as a separate view/entry point. The two views stay distinct: App Config
   is CC Deck's own prefs, Settings is Claude Code's `settings.json` — consistent with how #18/#19
   already drew that line.
-- **Independent audit found and fixed two issues in `SettingsSearchView.svelte`:** (1) MEDIUM — the
+- **Independent audit found and fixed two issues in [`SettingsSearchView.svelte`](../src/lib/components/SettingsSearchView.svelte):** (1) MEDIUM — the
   popover never read a tier's `parseError`, so editing a key in a tier whose on-disk JSON was
   currently invalid would spread `{...null}` and silently overwrite the rest of that file on Save;
   fixed by surfacing `parseError` as a warning and disabling the field/Save/Clear (via a `<fieldset
@@ -569,7 +569,7 @@ issue-update), as opposed to one-shot passive workers.
 - **#15 — stuck toasts/popovers.** The real bugs were not the suspected error-path (that was already
   covered) but missing `onDestroy` timer cleanup on five surfaces and the update-banner's transient
   statuses (`checking`/`uptodate`/`error`) never auto-dismissing at all. Fixed via a centralized
-  `setStatus()` dismiss timer in `updater.svelte.ts` plus `onDestroy(clearTimeout)` everywhere.
+  `setStatus()` dismiss timer in [`updater.svelte.ts`](../src/lib/updater.svelte.ts) plus `onDestroy(clearTimeout)` everywhere.
 - **#22 — clipboard fallback stale since #19.** `resumeCommand()` now mirrors the backend
   `build_resume_script` (env exports + `cd` + the configured `launch_command` verbatim) instead of a
   hardcoded `claude --resume <id>`, so the paste-fallback matches what actually launches for custom
@@ -598,7 +598,7 @@ auto-clean) before the v0.10.0 release.
 - `pnpm build`: clean production build (client + server/prerender), including the vendored schema
   JSON bundling correctly.
 - Full-repo grep confirms no remaining "Claude Code Studio" / "claude-code-studio" strings except
-  the intentionally-left npm package name (`package.json`'s `"name"` field — cosmetic, not
+  the intentionally-left npm package name ([`package.json`](../package.json)'s `"name"` field — cosmetic, not
   user-facing) — the same call already made for the Cargo crate name.
 - **Not performed**: live GUI/browser verification of `SettingsView.svelte`, the merged Browse+Search
   UI, or any of the six Phase 6 items above — the Chrome browser-automation extension wasn't
@@ -639,16 +639,16 @@ none of these are committed work — each needs its own design pass before becom
   superseded `claude-code-studio` package) — confirmed good.
 - **v0.6.0** — Version bump after founder sign-off on the 0.5.0 Deck pivot testing pass; no
   functional changes beyond the version bump itself. README rebrand (marketing pass, non-technical
-  section on top / technical below) and repo contribution setup (`CONTRIBUTING.md`, issue/PR
+  section on top / technical below) and repo contribution setup ([`CONTRIBUTING.md`](../CONTRIBUTING.md), issue/PR
   templates) landed alongside it — see below.
 - **CI/CD hardening (post-v0.6.0 tag).** The v0.6.0 release run flagged Node 20 deprecation
   warnings — `actions/checkout@v4`, `actions/setup-node@v4`, and `pnpm/action-setup@v4` were being
   silently forced onto Node 24 by GitHub. Bumped all three (`@v7`/`@v6`/`@v6`) plus
   `tauri-apps/tauri-action@v0` → `@v1` (checked the v1 changelog — none of its breaking changes
-  touch the inputs this repo uses). Added `.github/workflows/ci.yml`: a real CI check
+  touch the inputs this repo uses). Added [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): a real CI check
   (`pnpm check` + `pnpm build` + `cargo test --lib`) on every push/PR to `main` — previously the
   only workflow was the release build itself, so a broken PR could only be caught by a human.
-  Added `.github/dependabot.yml` covering the three dependency surfaces (pnpm/npm, Cargo, and the
+  Added [`.github/dependabot.yml`](../.github/dependabot.yml) covering the three dependency surfaces (pnpm/npm, Cargo, and the
   GitHub Actions versions in our own workflows), weekly, grouped by minor/patch to keep the PR
   volume sane.
 - **v0.10.0 (2026-07-08)** — Phase 14: editor simplification (#16), stuck-toast/popover fixes (#15),

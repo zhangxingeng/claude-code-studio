@@ -1,13 +1,13 @@
 # Search — Design & Implementation Plan
 
 Status: **BUILT (Phase 1/2) — all 12 milestones + all of Phase 2, including keyboard nav and the
-tool-name / current-session filters, as of 2026-07-04.** Backend: `src-tauri/src/search/{db,extract,
-index,query,state}.rs` — 30 unit/integration tests green. Frontend: `src/lib/search.svelte.ts`
-(store), consumed by `src/lib/components/BrowseView.svelte` (Browse + Search were later merged into
+tool-name / current-session filters, as of 2026-07-04.** Backend: [`src-tauri/src/search/`](../src-tauri/src/search/)`{db,extract,
+index,query,state}.rs` — 30 unit/integration tests green. Frontend: [`src/lib/search.svelte.ts`](../src/lib/search.svelte.ts)
+(store), consumed by [`src/lib/components/BrowseView.svelte`](../src/lib/components/BrowseView.svelte) (Browse + Search were later merged into
 one view — the original standalone `SearchView.svelte` no longer exists, see
-`project_docs/roadmap.md`) and `src/lib/components/InlineSearchPanel.svelte` ("find in this chat",
-mounted from `SessionEditor.svelte`). This doc is otherwise historical for Phase 1/2; build-progress
-items live in `project_docs/roadmap.md`.
+[`project_docs/roadmap.md`](roadmap.md)) and [`src/lib/components/InlineSearchPanel.svelte`](../src/lib/components/InlineSearchPanel.svelte) ("find in this chat",
+mounted from [`SessionEditor.svelte`](../src/lib/components/SessionEditor.svelte)). This doc is otherwise historical for Phase 1/2; build-progress
+items live in [`project_docs/roadmap.md`](roadmap.md).
 
 **See "v2 — fuzzy/intent search redesign" directly below — BUILT and shipped 2026-07-07 (issue #5,
 closed) — it supersedes §2, §9, and parts of §12/§14 of the Phase 1/2 spec that follows it.**
@@ -201,9 +201,9 @@ and richer filtering. Status of each:
    - Explicitly **out of scope**: model/git-branch filtering (needs new columns + reindex).
    - **Known gap**: today's navigation only reaches Search from Browse, so `currentSessionPath` is
      never actually populated yet in practice — the filter is correct and unit-tested, but no UI
-     entry point passes a real session path in. See `project_docs/roadmap.md` §Phase 6, item 4.
+     entry point passes a real session path in. See [`project_docs/roadmap.md`](roadmap.md) §Phase 6, item 4.
 
-See `project_docs/roadmap.md` for what came after Search Phase 2 — the wider CC Deck rebrand, settings editor,
+See [`project_docs/roadmap.md`](roadmap.md) for what came after Search Phase 2 — the wider CC Deck rebrand, settings editor,
 and terminal launcher.
 
 ## 1. Goal
