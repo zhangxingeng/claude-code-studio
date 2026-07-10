@@ -1,8 +1,11 @@
 # Prompt Library — Engineering Contract
 
-Status: **CONTRACT — UX round in build 2026-07-10** (founder's second feel-check pass on top of
-the revision round, issue #24; on branch `prompt-library`, unmerged, no shipped release contains
-this feature). The product design and its vision live in
+Status: **CONTRACT — shipped in v0.12.0** (2026-07-10, issue #24 closed; merged to `main`). The
+feature is now in released installs, so **a behavior change here is a migration, not a rewrite**:
+weigh what a user's existing `~/.ccdeck/prompts/` does with the change before you make it. The
+storage layout and the variable grammar are the two surfaces where that costs the most.
+
+The product design and its vision live in
 [issue #7's pinned design comment](https://github.com/zhangxingeng/ccdeck/issues/7). This doc is
 the *engineering* contract that design maps onto: storage, schema, the Rust↔JS command surface,
 the variable grammar, the match-engine architecture, and the compose-surface behavior model. It

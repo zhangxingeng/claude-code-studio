@@ -1,7 +1,10 @@
 # Prompt Library — Interaction Contract
 
-Status: **living UX contract, in review** (founder Round-B feel-check, 2026-07-10; branch
-`prompt-library`, unshipped — no release contains this feature). This is the sibling to the
+Status: **living UX contract — shipped in v0.12.0** (2026-07-10, issue #24 closed). Every scenario
+below is implemented and in released installs, so the *Today* tags now describe the shipped
+product and a *Change* tag is history, kept because the reasoning behind a rule outlives the diff
+that introduced it. Amend this doc first when an interaction changes; a behavior that lives only
+in the code is a behavior nobody agreed to. This is the sibling to the
 [engineering contract](prompts-design.md): where that doc says *what the system is* (storage,
 schema, the Rust↔JS command surface, the variable grammar, copy output), this one says *what the
 user does and what happens back*. The two touch at named seams; where a UX rule here forces a
@@ -18,10 +21,11 @@ mouse-off as possible."* Every mouse affordance in this doc has a keyboard equiv
 gap is called out as a defect to fix. The product voice is **Apple, not geek**: plain, quiet,
 confident. This doc's voice holds itself to the same bar.
 
-Naming note: **`piece` is renamed to `snippet`** everywhere (UI copy, identifiers, command and
-schema names) as one mechanical commit in the build phase. This doc uses "snippet" throughout;
-where it names a current symbol (`ComposeBox`, `composeInsertSnippet`) it names today's symbol so a
-builder can find it, and the rename sweep renames those too.
+Naming note: **`piece` was renamed to `snippet`** everywhere — UI copy, identifiers, command and
+schema names — in one mechanical commit (`5b4a989`). The rename stops at the storage boundary: the
+on-disk JSON field names and the embeddings cache's `piece_id` column keep their old names, so data
+and caches written before the rename still load. Beware that the Search domain has its own,
+unrelated `snippet` (a result excerpt); the word means two things in this codebase.
 
 ---
 
@@ -435,10 +439,11 @@ A builder can treat this as the acceptance checklist for the north star.
 
 ---
 
-## Contract implications
+## Contract implications — all landed in v0.12.0
 
-The exact edits [prompts-design.md](prompts-design.md) needs before any build. The lead amends the
-contract from this list; nothing here is built until it lands there.
+The edits [prompts-design.md](prompts-design.md) needed before this round could be built. **All
+five landed**; the list is kept as the record of which UX rules forced which seam changes, because
+the next person to change a seam will want to know what depended on it.
 
 1. **Per-variable as-variable replaces the global toggle** (§Copy output). The `promptsAsVariable`
    AppConfig field is **removed** (backend `appconfig.rs` + frontend `AppConfig` type + the dev
