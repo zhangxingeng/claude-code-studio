@@ -591,6 +591,33 @@ run — a cache artifact, not a real dangling reference; the production build re
 **Live GUI verification: performed by the founder** (top-nav save controls, toast auto-dismiss,
 auto-clean) before the v0.10.0 release.
 
+## Phase 15 — Harness parity + the generic migration protocol (DONE 2026-07-09, branches awaiting merge)
+
+Two coupled tracks, run lead-gated with sonnet teammates through checkpoint dialogues:
+
+- **Corpus track** (`ai-first-docs` branch `migration-protocol`, 8 commits): the new
+  **agentic-system migration protocol** (`craft/docs/agentic_system_migration_protocol.mdx` —
+  audit → gated plan → md-first execution → upstream merge → verify-with-loads-check, plus the
+  destination hints for misplaced artifacts), its pasteable entry point `.setup/migrate.md`
+  (existing-system sibling of `setup.md`), and `craft/docs/md_to_mdx_lift_procedure.mdx` (the
+  optional post-migration Starlight lift the md-first rule promises). Cold-audited, then amended
+  eight times from its own dogfood run before review.
+- **Dogfood track** (this repo, branch `harness-parity`, 16 commits): ccdeck migrated to full
+  harness parity BY the new protocol — three-layer always-on (root `CLAUDE.md`, `MEMORY.md` router,
+  autoloaded `system_prompt_append.md`), four agents, five skills with skills-as-docs symlinks,
+  three fail-open hooks (51 tests), playwright MCP (disabled-by-default), smoke tests in
+  `check_cmd`, ~110 bare paths → real links, scratch retired. The resulting bindings are documented
+  in [`agentic_harness.md`](agentic_harness.md).
+- **Discoveries worth remembering:** repo memory injection had been silently broken
+  (`autoMemoryDirectory` in tracked settings.json is ignored — fixed via gitignored
+  `settings.local.json`); Claude Code **autoloads** `.claude/system_prompt_append.md` (no launcher —
+  four docs corrected); the release flow's `gh release create` step was wrong (CI's tauri-action
+  creates/updates the release on tag push and overwrites manual title/body — now encoded in the
+  `cut-release` skill).
+- **Deferred with issues filed:** flat-mode check-links `/generic_docs/` prefix resolution
+  (ai-first-docs#17), upstream-merge of two generic memory rails (ai-first-docs#18),
+  retire-nudge hook port (#23).
+
 ## Verification performed
 
 - `cargo test --lib` (src-tauri): 30/30 passing.
