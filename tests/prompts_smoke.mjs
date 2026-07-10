@@ -1,7 +1,8 @@
 /**
  * Smoke test for the Prompt Library's pure logic (issue #24):
- * the compose-box provenance state machine (compose/doc.ts), copy
- * flattening, and placeholder handling (compose/placeholders.ts).
+ * the compose-box provenance state machine (compose/doc.ts), the variable
+ * grammar + copy output (compose/variables.ts — the Rust/TS seam, shared
+ * vectors encoded verbatim), and copy flattening.
  * Run with: npx tsx tests/prompts_smoke.mjs   (from repo root)
  */
 
@@ -24,8 +25,7 @@ const {
   caretQuery,
   diffTexts,
 } = await import(join(root, 'src/lib/compose/doc.ts'));
-const { parsePlaceholders, substitute, markPlaceholder, unmarkPlaceholder, isValidTokenName } =
-  await import(join(root, 'src/lib/compose/placeholders.ts'));
+const { parseVariables, copyText } = await import(join(root, 'src/lib/compose/variables.ts'));
 
 let failures = 0;
 function assert(cond, msg) {
@@ -62,12 +62,10 @@ function checkInvariants(doc, msg) {
   }
 }
 
-const link = (id = 'p1', template = 'LINKED', fills = {}) => ({
+const link = (id = 'p1') => ({
   pieceId: id,
   title: id,
   scope: { kind: 'global' },
-  template,
-  fills,
 });
 
 const states = (doc) => doc.spans.map((s) => s.state);
@@ -168,7 +166,7 @@ console.log('replaceSpan / linkRange / linkedSpanAt');
 
   // F4: a typed selection becomes a linked span; text unchanged.
   d = docFromText('reusable stuff here');
-  d = linkRange(d, 0, 8, link('new-piece', 'reusable'));
+  d = linkRange(d, 0, 8, link('new-piece'));
   checkInvariants(d, 'linkRange');
   eq(flatten(d), 'reusable stuff here', 'linkRange keeps text');
   eq(states(d), ['linked', 'typed'], 'linkRange states');
@@ -182,35 +180,114 @@ console.log('replaceSpan / linkRange / linkedSpanAt');
   eq(linkedSpanAt(d, 0), null, 'caret in typed text -> null');
 }
 
-// ── copy flattening ──────────────────────────────────────────────────────────
+// ── copy flattening + raw-document integration ──────────────────────────────
 console.log('copy flattening');
 {
-  // Copy Prompt is exactly the visible text — build a mixed doc and check.
-  let d = docFromText('intro ');
-  d = insertPiece(d, 6, substitute('Review {{ticket}} now.', { ticket: 'JUROR-412' }), link());
+  // The doc holds RAW text — a piece body's {var} tokens land verbatim as a
+  // linked span, unify with typed variables, and resolve only at copy.
+  let d = docFromText('intro {ticket} ');
+  d = insertPiece(d, d.text.length, 'Review {ticket:ABC-123} now.', link());
   d = applyEdit(d, d.text.length, d.text.length, ' outro');
   checkInvariants(d, 'mixed doc');
-  eq(flatten(d), 'intro Review JUROR-412 now. outro', 'flatten == visible text, fills substituted');
+  eq(flatten(d), 'intro {ticket} Review {ticket:ABC-123} now. outro', 'flatten == raw visible text');
+  eq(
+    parseVariables(flatten(d)),
+    [{ name: 'ticket' }],
+    'one unified variable across typed + linked spans (first occurrence has no default)'
+  );
+  eq(
+    copyText(flatten(d), { ticket: 'JUROR-412' }, false),
+    'intro JUROR-412 Review JUROR-412 now. outro',
+    'copy substitutes one fill into every occurrence'
+  );
 }
 
-// ── placeholders ─────────────────────────────────────────────────────────────
-console.log('placeholders');
+// ── variable grammar: the SHARED VECTORS (contract §Variable grammar) ────────
+// Both sides (Rust + TS) assert all of these verbatim — the seam contract.
+console.log('variable grammar (shared vectors)');
 {
-  eq(parsePlaceholders('a {{x}} b {{y}} {{x}}'), ['x', 'y'], 'parse dedupes, keeps order');
-  eq(parsePlaceholders('{{ spaced }} ok'), ['spaced'], 'parse trims inner whitespace');
-  eq(parsePlaceholders('no tokens'), [], 'parse none');
-  eq(parsePlaceholders('{{bad token}}'), [], 'space inside a name is not a token');
+  eq(parseVariables('{task}'), [{ name: 'task' }], 'vector: {task} — variable, no default');
+  eq(
+    parseVariables('{task:write tests}'),
+    [{ name: 'task', default: 'write tests' }],
+    'vector: {task:write tests} — variable with default'
+  );
+  eq(parseVariables('{task:}'), [{ name: 'task', default: '' }], 'vector: {task:} — empty default');
+  eq(
+    parseVariables('{x:a:b}'),
+    [{ name: 'x', default: 'a:b' }],
+    'vector: {x:a:b} — first colon splits'
+  );
+  eq(parseVariables('{{task}}'), [], 'vector: {{task}} — escaped, no variable');
+  eq(parseVariables('{"a": 1}'), [], 'vector: {"a": 1} — invalid name is literal');
+  eq(parseVariables('{my var}'), [], 'vector: {my var} — space is literal');
+  eq(parseVariables('{x-1_Y}'), [{ name: 'x-1_Y' }], 'vector: {x-1_Y} — hyphen/underscore/digit name');
+  eq(parseVariables('{:x}'), [], 'vector: {:x} — empty name is literal');
+  eq(
+    parseVariables('{{{task}}}'),
+    [{ name: 'task' }],
+    'vector: {{{task}}} — literal { + variable + literal }'
+  );
+  eq(
+    parseVariables('{x:a} {x:b}'),
+    [{ name: 'x', default: 'a' }],
+    'vector (rule 5): {x:a} {x:b} — one variable, first default wins'
+  );
+  eq(
+    parseVariables('{x} {x:b}'),
+    [{ name: 'x' }],
+    'vector (rule 5, plain read): {x} {x:b} — first occurrence wins even with NO default'
+  );
+  eq(
+    parseVariables('{a:{b}}'),
+    [{ name: 'b' }],
+    'vector: {a:{b}} — failed run consumes nothing; literal {a: + variable b + literal }'
+  );
+  eq(
+    copyText('{a:{b}}', { b: 'X' }, false),
+    '{a:X}',
+    'vector: {a:{b}} substitute mode — inner variable fills, outer braces stay literal'
+  );
 
-  eq(substitute('do {{x}} and {{y}}', { x: 'A', y: 'B' }), 'do A and B', 'substitute both');
-  eq(substitute('do {{x}} twice {{x}}', { x: 'A' }), 'do A twice A', 'substitute repeats');
-  eq(substitute('keep {{x}}', {}), 'keep {{x}}', 'unfilled stays literal (visible == copied)');
-  eq(substitute('blank {{x}}!', { x: '' }), 'blank !', 'empty string is a fill');
+  // Rule 4: one name = one variable across the whole document.
+  eq(
+    parseVariables('do {task} then {other} then {task:late}'),
+    [{ name: 'task' }, { name: 'other' }],
+    'dedupe keeps first-appearance order; later default never upgrades the first'
+  );
+}
 
-  eq(markPlaceholder('review PR now', 7, 9, 'ticket'), 'review {{ticket}} now', 'mark selection');
-  eq(unmarkPlaceholder('review {{ticket}} now', 'ticket'), 'review ticket now', 'unmark by name');
-  eq(unmarkPlaceholder('a {{x}} {{y}}', 'x'), 'a x {{y}}', 'unmark leaves other tokens');
-  assert(isValidTokenName('ticket-1'), 'valid token name');
-  assert(!isValidTokenName('has space'), 'invalid token name');
+// ── copy output (contract §Copy output) ──────────────────────────────────────
+console.log('copy output');
+{
+  // The contract's own example, verbatim: ON mode dedups into a vars block.
+  eq(
+    copyText('Review the PR for {ticket:ABC-123} and summarize.', {}, true),
+    'Review the PR for <prompt_var name="ticket"/> and summarize.\n\n' +
+      '<prompt_vars>\n<prompt_var name="ticket">ABC-123</prompt_var>\n</prompt_vars>',
+    'ON: contract example — occurrence element + appended block with default'
+  );
+  eq(
+    copyText('do {x} and {x}', { x: 'A' }, true),
+    'do <prompt_var name="x"/> and <prompt_var name="x"/>\n\n' +
+      '<prompt_vars>\n<prompt_var name="x">A</prompt_var>\n</prompt_vars>',
+    'ON: repeated occurrences, one block entry, user fill wins'
+  );
+  eq(
+    copyText('need {x}', {}, true),
+    'need <prompt_var name="x"/>\n\n<prompt_vars>\n<prompt_var name="x"></prompt_var>\n</prompt_vars>',
+    'ON: unfilled + no default = empty element (honest fill-me signal)'
+  );
+  eq(copyText('plain {{json}} body', {}, true), 'plain {json} body', 'ON: no variables, no block, escapes resolved');
+
+  // OFF mode: substitute in place.
+  eq(copyText('do {task:write tests}!', {}, false), 'do write tests!', 'OFF: default substitutes');
+  eq(copyText('do {task:write tests}!', { task: 'ship' }, false), 'do ship!', 'OFF: fill beats default');
+  eq(copyText('keep {x}', {}, false), 'keep {x}', 'OFF: unfilled, no default — literal stays visible');
+  eq(copyText('blank {task:}!', {}, false), 'blank !', 'OFF: {task:} fills as empty when unfilled');
+  eq(copyText('{x:a} {x:b}', {}, false), 'a a', 'OFF (rule 5): first default serves every occurrence');
+  eq(copyText('{{literal}} and {v:x}', {}, false), '{literal} and x', 'OFF: escapes resolve on copy');
+  eq(copyText('', {}, true), '', 'empty document copies empty');
 }
 
 // ── editor plumbing: caretQuery + diffTexts ──────────────────────────────────
