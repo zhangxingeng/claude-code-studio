@@ -68,7 +68,8 @@ in a situation this doc never enumerated, rather than memorizing a table.
 The Prompts view, top to bottom: the **scope tab row** (Global + pinned projects + a `⋯`
 manager), then a two-column body — the **library/match panel** on the left (collapsible), the
 **compose box** on the right. The compose box is the only place text is typed. A **settings gear**
-opens a popover *above* the box. Situational affordances live on the box: `Copy prompt`
+sits at the right end of the tab row and opens the app-level config popover. Situational
+affordances live on the box: `Copy prompt`
 (bottom-right, only with text), `Save as…` (bottom-left, always), the floating save button (next
 to a selection), the edit chip (above the box, when the caret is in a linked span), and the
 **variable fill list** (below the box, when the text has variables).
@@ -172,20 +173,21 @@ choice**, not one switch over the whole prompt.
   (`copyText`) takes a per-name ON/OFF map instead of one boolean. See
   [Contract implications](#contract-implications) — this kills the `promptsAsVariable` AppConfig
   field and changes the copy API's signature.
-- **Judgment call (JC-1): the default keys off repetition, not length.** As-variable exists to
-  avoid *repeating* content — the founder's words: *"repeating would be purely wasting context."*
-  A variable that appears **once** costs strictly more as `<prompt_var name="x"/>` plus a block
-  entry than it does substituted in place, however long its value. So: **a variable defaults ON
-  when it occurs more than once in the document, OFF when it occurs once.** One sentence, and it is
-  exactly the reason the feature exists.
+- **The default is ON, for every variable — founder ruling (2026-07-10).** No cleverness, no
+  heuristic. The reason is an asymmetry of failure modes, in his words: *"as var never breaks, but
+  not-as-var on wrong data can bloat prompt up."* A hoisted variable is always safe; an in-place
+  substitution of a large or unexpected value silently inflates the prompt. When one side of a
+  choice can only cost you elegance and the other can cost you the prompt, the default takes the
+  safe side and the user opts out per variable.
 
-  A length-based default ("ON when the value is long") was the first instinct and is wrong twice
-  over: it pays the wrapper cost for a long value used once, and it keys off the *resolved value*,
-  which changes as the user types into the fill input — the toggle would flip under their fingers.
-  Occurrence count is stable. The default is computed **once, when the variable enters the list**,
-  and never re-flips on its own; the moment the user touches a toggle, it is theirs. Overrule
-  options: all-OFF, or all-ON (today's behavior, but it wraps one-word values in XML noise). This
-  state is per-session, never written back to the snippet ([JC-9](#judgment-calls-collected)).
+  Two rejected alternatives, recorded so nobody re-proposes them: a **length-based** default ("ON
+  when the value is long") keys off the resolved value, which changes as the user types into the
+  fill input — the toggle would flip under their fingers. An **occurrence-based** default ("ON only
+  when used more than once") optimizes token count, which is the wrong thing to optimize: it trades
+  a guaranteed-safe default for a few saved characters. Both were considered and both lose to the
+  asymmetry.
+
+  The state is per-session, never written back to the snippet ([JC-9](#judgment-calls-collected)).
 
 ### S5. Save the whole box
 
@@ -285,18 +287,23 @@ stored snippet on its own; the choice happens at save time.
 
 Three popovers exist: **settings/config** (gear), **project manager** (`⋯`), **snippet modal**.
 
-- **Settings gear.** `Enter`/click the gear opens the popover **above** the compose box. `Esc` or
-  click-away closes it; focus returns to the gear.
+- **Settings gear.** Anchored at the **right end of the scope tab row** — it is app-level config,
+  not a library-panel control. `Enter`/click opens the popover downward; `Esc` or click-away
+  closes it; focus returns to the gear.
 - **Project manager.** `Enter`/click `⋯` opens it under the tab row. `Esc`/click-away closes;
   focus returns to `⋯`.
 - **Snippet modal.** Opens from the edit chip, a double-click on a span, `Save as…`, or the
   floating save button. `Esc`/`Cancel` closes; focus returns to the caret in the box.
-- **Today.** The settings surface is the `EmbeddingsPopover` gear, anchored in the **library
-  panel head** and opening **downward** (`top: 1.7rem`). The founder wants the settings popover
-  **above** the compose box. All three have `Esc` handlers but **no focus trap and no focus
-  restore** (a known Round-A follow-up).
-- **Change.** Re-anchor the settings popover to open upward from a gear near the compose box (see
-  [JC-5](#judgment-calls-collected)). Add focus trap + restore to all three — see
+- **Today.** The settings surface is the `EmbeddingsPopover` gear, rendered inside
+  `prompts-view__panel-head` — a *library-panel* control. It therefore inherits that panel's
+  stacking and clipping: the founder's report is that it opens **behind** the compose box and
+  drags a resizer into view. All three surfaces have `Esc` handlers but **no focus trap and no
+  focus restore** (a known Round-A follow-up).
+- **Change.** Move the gear to the **right end of the tab row** and fix the containment **at
+  root** — the popover must not be clipped or out-stacked by any ancestor's `overflow` or
+  stacking context. Relocating alone would only move the bug to the next anchor; whoever builds
+  this must confirm the popover escapes its ancestors (portal or fixed positioning), not merely
+  that it looks right in the one state they tested. Add focus trap + restore to all three — see
   [Popover geometry & focus](#popover-geometry-focus-trap-and-escape).
 
 ### S11. Download & index the semantic model
@@ -390,7 +397,7 @@ inferable conventions the whole design rests on.
 
 | Popover | Anchor | Opens | Focus on open | Escape |
 |---|---|---|---|---|
-| Settings/config (gear) | gear near the compose box | **above** the box | first control (or Notices, if unresolved events) | close → focus gear |
+| Settings/config (gear) | right end of the tab row | downward, clipped by nothing | first control (or Notices, if unresolved events) | close → focus gear |
 | Project manager (`⋯`) | under the tab row | downward | the "New project" name input | close → focus `⋯` |
 | Snippet modal | centered over the view | modal | Title (new) / Body (edit) | close → focus compose caret |
 
@@ -433,7 +440,7 @@ contract from this list; nothing here is built until it lands there.
    fallback in `api.ts`). `copyText` changes signature from `(text, fills, asVariable: boolean)` to
    take a **per-name ON/OFF map** (e.g. `asVars: Record<string, boolean>`). The Rust side, which
    never renders copy output, is unaffected — copy stays frontend-only. Document the
-   occurrence-based default (JC-1) as the seam both the fill list and the copy builder read.
+   default-ON rule (JC-1) as the seam both the fill list and the copy builder read.
 2. **`piece` → `snippet` rename** touches the command names (`list_pieces`, `save_piece`,
    `delete_piece`, `piece_load_errors`, `MatchHit`/`Piece` types), the schema field references in
    §Piece schema, storage-path prose (`prompts/` file comments say "piece"), and all UI copy. One
@@ -467,10 +474,11 @@ authorized to make, not a fork I need him to resolve.
   [S9](#s9-copy--button-and-hotkey)
 - **JC-5 — durable data-event trace lives on the settings gear** (badge + Notices), not a
   standalone strip. [S13](#s13-toast-lifecycle-and-recovering-a-repair-notice)
-- **JC-6 — one consolidated settings popover** (semantic matching + shortcuts + Notices) anchored
-  above the compose box, rather than several small popovers. Rationale: fewer surfaces, matches
-  "config lives in a popover"; overrule if the founder wants matching settings kept in the library
-  panel where they are today. [S10](#s10-open-and-close-the-popovers)
+- **JC-6 — one consolidated, app-level settings popover** (semantic matching + shortcuts +
+  Notices) anchored at the right end of the tab row. **Founder ruling (2026-07-10):** the popover
+  is app-level config, and its home in the library-panel head is what puts it behind the compose
+  box. Consolidation confirmed; the anchor is the tab row, not "above the compose box" as the
+  first draft read it. [S10](#s10-open-and-close-the-popovers)
 
 - **JC-7 — `Update snippet` does not re-sync other inserted copies.** Spans stay point-in-time
   snapshots (the tint marks origin, not liveness), so updating a snippet leaves a second copy of
@@ -481,28 +489,28 @@ authorized to make, not a fork I need him to resolve.
 - **JC-8 — the rebinding UI ships minimal**: per-row change/reset, inline conflict rejection. No
   conflict graph, no keymap import/export until someone actually wants one. [Hotkeys](#hotkey-map)
 
-- **JC-9 — as-var state is session-only**, never persisted to the snippet schema. The
-  occurrence-based default ([JC-1](#s4-fill-variables-per-variable-toggle)) already picks right
-  most of the time; a per-placeholder `as_var` hint earns its schema change only if re-toggling
-  turns out to annoy in practice. [S4](#s4-fill-variables-per-variable-toggle)
+- **JC-9 — as-var state is session-only**, never persisted to the snippet schema. With the
+  default-ON rule ([JC-1](#s4-fill-variables-per-variable-toggle)) the safe choice is already made
+  for you; a per-placeholder `as_var` hint earns its schema change only if turning the same
+  variable off, session after session, turns out to annoy in practice.
+  [S4](#s4-fill-variables-per-variable-toggle)
 
 ---
 
-## Open questions for the founder
+## Open questions
 
-**None block the build.** The forks the first draft left open are resolved above as JC-7…JC-9, each
-cheap to overrule — this doc's review *is* the gate, so a call made here costs nothing to reverse
-and costs a build round if it is deferred.
+**None. The doc is cleared to build** (founder, 2026-07-10). The two forks that encoded his
+reasoning rather than the author's were put to him and answered:
 
-Two are worth your eye specifically, because they encode *your* reasoning rather than mine:
+- **As-variable defaults ON for every variable** — the failure modes are asymmetric
+  ([JC-1](#s4-fill-variables-per-variable-toggle)). Both "smart default" proposals were rejected.
+- **The config popover is app-level, anchored at the right of the tab row**
+  ([JC-6](#s10-open-and-close-the-popovers)) — and its current home in the library panel is the
+  cause of the occlusion bug, not merely a poor location.
 
-- **[JC-1](#s4-fill-variables-per-variable-toggle)** — a variable defaults to as-var when it occurs
-  more than once. This reads your "don't repeat verbose content" rationale literally. If what you
-  actually wanted is *"long values get the XML wrapper even when used once"* — because the wrapper
-  also tells the model "this is a parameter" — say so, and the rule changes.
-- **[JC-6](#s10-open-and-close-the-popovers)** — folding the semantic-matching controls into one
-  settings popover above the compose box. Your words were "the setting popover should be above the
-  compose box," which reads as relocation; this goes further and consolidates. Easy to split back.
+Everything else stands as JC-2…JC-9, each cheap to overrule while the code is young. When
+something here proves wrong in the hand, change this doc first — it is the interaction contract,
+and a behavior that lives only in the code is a behavior nobody agreed to.
 
 ---
 

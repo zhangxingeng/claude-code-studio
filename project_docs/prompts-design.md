@@ -1,18 +1,28 @@
 # Prompt Library — Engineering Contract
 
-Status: **CONTRACT — Revision round in build 2026-07-10** (founder's post-feel-check design
-revision on top of Core M1+M2+M3, issue #24; on branch `prompt-library`, unmerged, no shipped
-release contains this feature). The product design and its vision live in
+Status: **CONTRACT — UX round in build 2026-07-10** (founder's second feel-check pass on top of
+the revision round, issue #24; on branch `prompt-library`, unmerged, no shipped release contains
+this feature). The product design and its vision live in
 [issue #7's pinned design comment](https://github.com/zhangxingeng/ccdeck/issues/7). This doc is
 the *engineering* contract that design maps onto: storage, schema, the Rust↔JS command surface,
 the variable grammar, the match-engine architecture, and the compose-surface behavior model. It
 ages with the code, like [search-design.md](search-design.md) does for chat search.
 
+Its sibling is [prompts-ux.md](prompts-ux.md), the **interaction contract**: every user scenario
+with its exact keys and resulting state. Where this doc says what the system *is*, that one says
+what the user *does*. Behavior questions belong there; seam shapes belong here. Neither is
+authoritative over the other's half.
+
 Founder directives folded in 2026-07-10: **projects are first-class (creatable, colored,
 pinnable as tabs); variables are single-brace f-string style with defaults; the compose surface
-is the only typing surface (situational affordances, no persistent buttons); keywords/tags are
-demoted to metadata; embeddings collapse into a config popover; the store survives hand-edit
-JSON corruption. Apple vibe, not geek vibe: simple per page, split meaningfully.**
+is the only typing surface; keywords/tags are demoted to metadata; embeddings collapse into a
+config popover; the store survives hand-edit JSON corruption. Apple vibe, not geek vibe: simple
+per page, split meaningfully.**
+
+Round-B directives (this round): **the user must be able to work mouse-off; as-variable is a
+per-variable choice, not one switch; notifications are transient but data events stay
+recoverable; inline edits reconcile at save time (update the snippet, or save a new one); config
+is app-level, not a library-panel control; hotkeys exist and rebind.**
 
 ## Storage layout — `~/.ccdeck/`
 
@@ -147,14 +157,30 @@ Shared test vectors (both sides assert all of these):
 | `{x} {x:b}` | one variable `x`, **no** default (rule 5 reads plainly: the first occurrence wins even when it carries no default — predictability over helpfulness) |
 | `{a:{b}}` | literal `{a:` + variable `b` + literal `}` (a failed variable run consumes nothing; scanning resumes within it, same shape as `{{{task}}}`) |
 
-## Copy output — the "as variable" toggle
+## Copy output — the per-variable "as variable" toggle
 
-A compose-box toggle, default **ON**, persisted in app config (`prompts_as_variable`). Copy
-always resolves escapes (`{{`→`{`).
+**One toggle per variable**, living on that variable's row in the fill list. Every variable
+defaults **ON**; the user turns individual ones off. Founder's rule, and the reason it is not a
+smarter default: *as-variable never breaks anything, while substituting the wrong data in place
+can bloat the prompt.* The failure modes are asymmetric, so the default takes the safe side and
+the user opts out per variable when substitution reads better.
 
-- **ON** (dedup mode — a long value is stated once, never repeated inline): every variable
-  occurrence becomes `<prompt_var name="x"/>`, and a block is appended after the body listing
-  each distinct variable in first-appearance order:
+A document therefore mixes modes: some variables are referenced and hoisted, others substituted
+inline. The appended block lists **only the ON variables**, still in first-appearance order.
+There is no global switch and **no `prompts_as_variable` app-config field** (removed this round —
+the setting is per-variable, per-session, and never written to the snippet). The frontend copy
+builder takes a per-name map:
+
+```ts
+copyText(text: string, fills: Record<string, string>, asVars: Record<string, boolean>): string
+// A name absent from `asVars` is ON. Copy rendering is frontend-only; Rust never renders.
+```
+
+Copy always resolves escapes (`{{`→`{`).
+
+- **ON** (dedup mode — a long value is stated once, never repeated inline): every occurrence of
+  that variable becomes `<prompt_var name="x"/>`, and a block is appended after the body listing
+  each distinct ON variable in first-appearance order:
 
   ```
   Review the PR for <prompt_var name="ticket"/> and summarize.
@@ -172,10 +198,29 @@ always resolves escapes (`{{`→`{`).
   parseability, and an unescaped value containing `</prompt_var>` could inject phantom
   variables into what the reading LLM sees. (Names need no escaping — the grammar's name class
   is attribute-safe by construction.)
-- **OFF** (substitute in place): each occurrence is replaced by user value, else default, else
-  the **canonical** literal `{x}` stays (not the occurrence's original spelling — relevant when
-  a later occurrence carried a rule-5-ignored default) — visible, so an unfilled variable is
-  never silently blanked. Copy rendering is frontend-only; Rust never renders output.
+- **OFF** (substitute in place): each occurrence of that variable is replaced by user value, else
+  default, else the **canonical** literal `{x}` stays (not the occurrence's original spelling —
+  relevant when a later occurrence carried a rule-5-ignored default) — visible, so an unfilled
+  variable is never silently blanked. Substituted values are plain text and are **never**
+  XML-escaped; escaping is a property of the block, not of the prompt.
+
+## Hotkeys (new this round)
+
+Prompts-view-scoped, armed on view enter, never firing while a modal owns the keyboard. The
+global `Ctrl/Cmd+K` still wins. Defaults and the full interaction live in
+[prompts-ux.md](prompts-ux.md#hotkey-map); the seam here is storage:
+
+```
+AppConfig.hotkeys: Record<string, string>   // command id -> chord, e.g. "copyPrompt": "Mod+C"
+```
+
+- Persisted through the existing `get_app_config` / `set_app_config` — **no new command surface.**
+- A chord is normalized with `Mod` standing for `Ctrl` on Windows/Linux and `Cmd` on macOS, so a
+  single stored binding is correct on every platform and a config file is portable.
+- An absent command id falls back to its default. A fresh install and a pre-hotkeys config are
+  therefore the same case, and neither needs a migration.
+- Only *command* hotkeys rebind. `↓` / `Enter` / `Esc` are spatial and contextual keys, not
+  commands: rebinding them would break the conventions the rest of the interaction infers from.
 
 ## Rust ↔ JS command contract
 
@@ -223,18 +268,37 @@ The compose box holds **raw literal text** — including `{var}` tokens, which a
 only at copy time. Spans track provenance as before: **typed**, **linked** (from a piece,
 unchanged), **linked-modified** (edited inline; never touches the stored piece).
 
+Switching tabs **never edits the draft**: composed text survives a tab switch untouched, and
+cross-project reference is allowed. Scope is a decision made at save time, never a mode the draft
+lives inside — so the app never nags a user to move what they wrote.
+
 - **Tabs**: Global plus every pinned project, atop the view. The active tab is the scope — it
-  sets the match pool (`match_pieces` project_id), the save target for new pieces, and the
-  visual tint. Unpinned projects are reachable through the project manager popover.
-- **Situational affordances — no persistent buttons**:
+  sets the match pool (`match_pieces` project_id), the *default* save target for new pieces, and
+  the visual tint. Unpinned projects are reachable through the project manager popover. The tab
+  row is a roving-tabindex widget (`←`/`→` move, `Enter`/`Space` activate).
+- **Situational affordances, with exactly one persistent control**:
   - *Copy Prompt* appears bottom-right only while the box has content.
-  - *Save as piece* floats next to an active text selection; it opens the piece modal prefilled
-    with the selection, scoped to the active tab. (This is also how new pieces are born — there
-    is no "+ New piece" button; everything is typed in the compose box first.)
+  - *Save as…* is **always present** (bottom-left) and selection-aware: it saves the selection
+    when there is one, else the whole box. This is the round-B walk-back on "no persistent
+    buttons" — "save what I just wrote" is a first-class intent, and requiring a selection first
+    made whole-box save impossible. The floating *Save as…* next to a live selection remains as
+    the fast mouse path; both open the same modal and both surface the target scope with a
+    one-click switch to Global or another project.
   - The *variable fill list* auto-appears beneath the box whenever parsing finds variables: one
     row per distinct name (first-appearance order) showing the name, its default as the input's
-    placeholder text, and a fill input. The fill-at-insert popover from Core is retired —
-    inserting a piece with variables just merges its names into this unified list.
+    placeholder text, a fill input, and that variable's **as-variable toggle** (§ Copy output).
+    The fill-at-insert popover from Core is retired — inserting a piece with variables just
+    merges its names into this unified list.
+- **Insertion is one path with two triggers** (click a hit, or `↓` into the panel then `Enter`).
+  Either way the inserted body **replaces the query line** — the text from the current line's
+  start to the caret, which is exactly what `caretQuery` matched on. The query was scaffolding
+  for finding the snippet; leaving it in front of the inserted body is litter.
+  - `↓` steps from the box into the panel **only when the caret is at the very end of the text**,
+    the one position where `↓` is natively inert in a textarea. Everywhere else it moves the
+    caret, as a user editing mid-document expects.
+  - Consequently `Enter` inserts only *after* that explicit step. The two rules are one decision:
+    since the whole line is the query, an auto-armed `Enter` would let a stray keypress replace a
+    sentence the user meant to keep. Change one and the other must change with it.
 - **Color language** (all values are `app.css` tokens or `color-mix` over tokens — no hex in
   components; light + dark both defined):
   - Compose-box background: a *faint hint* of the active project's `--project-<key>` (via
@@ -249,17 +313,45 @@ unchanged), **linked-modified** (edited inline; never touches the stored piece).
     on color keys.
 - **Piece modal**: two tabs — **Content** (title, body, and a read-only variable preview:
   parsed names + defaults) and **Metadata** (keywords, tags, category). Editing reached from the
-  match panel or a linked span, as in Core.
-- **Embeddings/config popover**: replaces the inline embeddings panel. One "Download & index"
-  action with the requirements note (sizes, CPU-only), then two progress bars — Download
-  (runtime + model stages aggregated) and Index (the "index" stage) — plus the enable toggle.
+  match panel or a linked span, as in Core. Opened from a span, the body defaults to the span's
+  **current edited text**, not the stored body — the user edited it because they meant to, and
+  showing them the old text is an answer to a question they did not ask. An **Original** button
+  (beside Delete) previews the stored body read-only; it never reverts, because a one-click
+  "Original" that discarded the user's typing is exactly the surprise this product avoids.
+  Reverting, if offered, is a separate labeled action.
+  - Two save actions: **Update snippet** (write the edit back as canonical — appends a version,
+    destroys nothing) and **Save as new** (a fresh snippet from the edited text, original
+    untouched). After either, the span relinks to the snippet it now reflects.
+  - Inline edits **never** mutate a stored snippet on their own. The compose box is a scratch
+    surface; reconciliation is always an explicit act.
+  - Other spans of the same snippet already in the box do **not** re-sync on Update: spans are
+    point-in-time snapshots and the tint marks origin, not liveness. A quiet toast says how many
+    copies were left unchanged, so the choice is visible rather than silent.
+- **Config popover — app-level, anchored at the right of the tab row.** It is not a library-panel
+  control: today's placement inside the panel head is why it renders behind the compose box and
+  drags a resizer into view. Fix the containment at root — the popover must not be clipped or
+  stacked by any ancestor's `overflow`/stacking context — rather than only moving it, or the same
+  bug reappears at the next anchor. It holds semantic-matching config (one "Download & index"
+  action with the requirements note, then two progress bars — Download and Index — plus the
+  enable toggle), the **Shortcuts** rebinding rows, and **Notices** (§ Store robustness).
+- **Popovers and the modal trap focus** (`Tab`/`Shift+Tab` cycle within; the opener is refocused
+  on close) and close on `Esc` or click-away. A mouse-off product where `Tab` walks focus behind
+  an open modal is not actually operable without a mouse — the trap is load-bearing, not polish.
 
 ## Store robustness — hand-edit corruption (new this round)
 
 - On JSON parse failure the loader attempts an **in-memory jsonrepair-style recovery** (vetted
   mature crate if one exists — builder verifies — else a bounded port: unquoted keys, trailing
   commas, comments, single quotes, truncation). A recovered piece loads flagged
-  `recovered: true` (transient) and the UI shows it needs attention.
+  `recovered: true` (transient).
+
+  **How the UI shows it needs attention** (revised): a repair is a *data event* — it touched the
+  user's files. It announces itself in a 5-second toast like every other notification, but unlike
+  a confirmation it also leaves a durable trace: a badge on the config gear, and a **Notices**
+  section in the config popover listing each repaired snippet (with the "open and re-save to
+  persist the repair" nudge) and each unreadable file. The badge clears when the condition does.
+  A transient surface must never be the only record of something that changed a user's data —
+  and a permanent banner for a routine event is the clutter this design otherwise refuses.
 - **The user's file on disk is never rewritten by the loader.** The repaired form persists only
   on the user's next explicit save of that piece — which appends a version like any body change.
 - Unrecoverable files stay in `piece_load_errors` exactly as in Core: visible, intact on disk.
