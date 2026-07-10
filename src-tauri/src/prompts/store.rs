@@ -8,13 +8,14 @@
 //! over filename so a hand-copied file with a stale name still loads, and
 //! saves always land at `<id>.json` (cleaning up stale-named twins).
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use super::grammar::{self, Placeholder};
 
 /// Where a piece applies: everywhere, or one project (the decoded cwd the
 /// app's project picker shows — readable in hand-edited JSON).
@@ -24,13 +25,6 @@ pub enum Scope {
     #[default]
     Global,
     Project { project: String },
-}
-
-/// A `{{token}}` occurrence in the body, derived at save time (the body is
-/// the single source of truth; this array exists so consumers don't re-parse).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Placeholder {
-    pub name: String,
 }
 
 /// One prior body, pushed when a save changes the body. `saved_at` is when
@@ -103,38 +97,6 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-/// Is `c` allowed in a placeholder name? The grammar is `[\w.-]+` — exactly
-/// the frontend's `parsePlaceholders` regex (ASCII `\w`, so no spaces, no
-/// unicode letters). The two lanes MUST agree: a looser rule here would store
-/// a placeholder entry the fill-in popover never shows (audit M2).
-fn is_placeholder_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')
-}
-
-/// Derive `placeholders` from `{{token}}` occurrences: token must fully match
-/// `[\w.-]+` (no trimming — `{{ a }}` is prose, not a placeholder), deduped
-/// in first-seen order.
-pub fn derive_placeholders(body: &str) -> Vec<Placeholder> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    let mut rest = body;
-    while let Some(start) = rest.find("{{") {
-        let after = &rest[start + 2..];
-        let Some(end) = after.find("}}") else {
-            break;
-        };
-        let name = &after[..end];
-        if !name.is_empty()
-            && name.chars().all(is_placeholder_char)
-            && seen.insert(name.to_string())
-        {
-            out.push(Placeholder { name: name.to_string() });
-        }
-        rest = &after[end + 2..];
-    }
-    out
 }
 
 /// A piece file the loader could not honor: broken JSON, or shadowed by a
@@ -271,7 +233,7 @@ pub fn save_piece_at(dir: &Path, input: PieceInput, now: u64) -> Result<Piece, S
                 tags: input.tags,
                 category: input.category,
                 scope: input.scope,
-                placeholders: derive_placeholders(&input.body),
+                placeholders: grammar::derive_placeholders(&input.body),
                 created_at: prev.created_at,
                 updated_at: now,
                 versions: prev.versions,
@@ -286,7 +248,7 @@ pub fn save_piece_at(dir: &Path, input: PieceInput, now: u64) -> Result<Piece, S
             tags: input.tags,
             category: input.category,
             scope: input.scope,
-            placeholders: derive_placeholders(&input.body),
+            placeholders: grammar::derive_placeholders(&input.body),
             created_at: now,
             updated_at: now,
             versions: Vec::new(),
@@ -571,14 +533,36 @@ mod tests {
     #[test]
     fn create_assigns_uuid_and_writes_canonical_file() {
         let dir = tmp_dir("create");
-        let p = save_piece_at(&dir, input("t", "b {{ticket}} {{ticket}} {{env}}"), 100).unwrap();
+        let p = save_piece_at(&dir, input("t", "b {ticket:ABC-123} {ticket} {env}"), 100).unwrap();
         assert!(uuid::Uuid::parse_str(&p.id).is_ok());
         assert_eq!(p.created_at, p.updated_at);
         assert!(dir.join(format!("{}.json", p.id)).is_file());
         assert_eq!(
             p.placeholders,
-            vec![Placeholder { name: "ticket".into() }, Placeholder { name: "env".into() }],
-            "derived and deduped"
+            vec![
+                Placeholder { name: "ticket".into(), default: Some("ABC-123".into()) },
+                Placeholder { name: "env".into(), default: None },
+            ],
+            "derived via the v2 grammar, deduped, first occurrence's default kept"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn placeholder_default_round_trips_through_the_file() {
+        // The schema example's exact shape: {"name": "ticket", "default": "ABC-123"}
+        // — and a default-less entry omits the key entirely (Option skip).
+        let dir = tmp_dir("ph-default");
+        let p = save_piece_at(&dir, input("t", "{ticket:ABC-123} {env}"), 100).unwrap();
+        let raw: Value =
+            serde_json::from_str(&fs::read_to_string(dir.join(format!("{}.json", p.id))).unwrap())
+                .unwrap();
+        assert_eq!(raw["placeholders"][0]["name"], "ticket");
+        assert_eq!(raw["placeholders"][0]["default"], "ABC-123");
+        assert_eq!(raw["placeholders"][1]["name"], "env");
+        assert!(
+            !raw["placeholders"][1].as_object().unwrap().contains_key("default"),
+            "no default → no key, per the contract's optional-default schema"
         );
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -626,29 +610,8 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    // --- placeholder derivation ---
-
-    #[test]
-    fn placeholder_edge_cases() {
-        assert!(derive_placeholders("no tokens").is_empty());
-        assert!(derive_placeholders("empty {{}} token").is_empty());
-        assert!(derive_placeholders("unclosed {{token").is_empty());
-        assert_eq!(derive_placeholders("{{a}}{{b}}").len(), 2);
-        assert!(
-            derive_placeholders("{{multi\nline}}").is_empty(),
-            "newline inside braces is prose, not a placeholder"
-        );
-        // Grammar is the frontend's [\w.-]+ EXACTLY (audit M2) — a looser
-        // rule here would store placeholders the fill popover never shows.
-        assert!(derive_placeholders("{{bad token}}").is_empty(), "spaces are prose (frontend pins this)");
-        assert!(derive_placeholders("{{ padded }}").is_empty(), "no trimming — space is a mismatch");
-        assert!(derive_placeholders("{{tickét}}").is_empty(), "ASCII \\w only, like the JS regex");
-        assert_eq!(
-            derive_placeholders("{{a-b.c_d9}}"),
-            vec![Placeholder { name: "a-b.c_d9".into() }],
-            "the full [\\w.-]+ class is accepted"
-        );
-    }
+    // Placeholder-grammar edge cases live in `grammar::tests` (the shared
+    // contract vectors, asserted verbatim by both lanes).
 
     // --- delete ---
 
