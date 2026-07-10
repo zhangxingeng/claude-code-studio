@@ -19,7 +19,7 @@ creates the GitHub Release. There is no release wrapper script — the steps bel
 3. **Sync the Cargo lockfile:** `cargo update -p ccstudio` (the crate is named `ccstudio`, not ccdeck). Skipping this leaves `Cargo.lock` at the old version and the release build dirties the tree in CI.
 4. **Commit** the four files: `Bump version to X.Y.Z`.
 5. **Tag and push:** `git tag vX.Y.Z && git push origin main vX.Y.Z`.
-6. **CI does the rest** — `.github/workflows/release.yml` triggers on the `v*` tag: tauri-action builds macOS/Windows/Linux installers, creates the GitHub Release (name, body, artifacts) itself. Do **not** also run `gh release create`; the workflow owns release creation, and a manually pre-created release just gets attached to with a different body.
+6. **CI does the rest** — `.github/workflows/release.yml` triggers on the `v*` tag: tauri-action builds macOS/Windows/Linux installers, creates the GitHub Release (name, body, artifacts) itself. Do **not** also run `gh release create` — and know that it wouldn't stick anyway: tauri-action creates-or-UPDATES the release for the tag and **overwrites a hand-crafted title/body** (verified on v0.11.0: its manual "Provider profiles" title was clobbered by the workflow's "CC Deck v0.11.0"). Release copy changes belong in release.yml's `releaseBody`, not in a manual release edit.
 7. **Verify:** `gh run watch` (or check Actions) until the matrix finishes, then `gh release view vX.Y.Z` — all platform artifacts attached.
 
 ## If the build fails after tagging

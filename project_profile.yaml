@@ -21,7 +21,7 @@ cold_audit_provider: "sonnet" # Provider used for cold-audit / adversarial-revie
 
 # ── Git / workspace ────────────────────────────────────────────
 integration_branch: "main" # The branch PRs target; the merge-base for worktrees
-check_cmd: "pnpm check && cargo test --lib --manifest-path src-tauri/Cargo.toml" # Full verify suite: SvelteKit type-check (frontend) + Rust unit tests (src-tauri backend)
+check_cmd: "pnpm check && cargo test --lib --manifest-path src-tauri/Cargo.toml && pnpm run test:smoke" # Full verify suite: SvelteKit type-check + Rust unit tests + smoke suite (NOT test:e2e — chromium install is too heavy for the agent verify loop; CI covers e2e)
 lint_fix_cmd: "" # The command that runs the auto-fixer (lint --fix, format, generate types)
 generate_types_cmd: "" # The command that regenerates API types from the backend schema
 docs_regen_cmd: 'python3 "$CLAUDE_PROJECT_DIR/ai-first-docs/.setup/site/mcp_servers/docs_catalog.py" regen --content-root "$CLAUDE_PROJECT_DIR/ai-first-docs"' # Regenerates the flat-mode doc catalog into ai-first-docs/craft/docs/generated_essential_docs.json

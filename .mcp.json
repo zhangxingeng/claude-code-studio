@@ -5,6 +5,16 @@
       "command": "uv",
       "args": ["run", "--script", "ai-first-docs/.setup/site/mcp_servers/load_docs_mcp_server.py"],
       "env": { "AIFIRST_DOCS_CONTENT_ROOT": "ai-first-docs" }
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp",
+        "--headless",
+        "--isolated",
+        "--output-dir=.claude/tmp/playwright"
+      ]
     }
   }
 }
