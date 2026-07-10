@@ -6,8 +6,6 @@ terminal or hand-editing JSON.
 
 **Offline** · **Your data never leaves your machine** · **Open source, MIT licensed**
 
-![CC Deck — a session rendered as a clean conversation with version diffs and the save bar](project_docs/hero.png)
-
 ## Why CC Deck exists
 
 Claude Code is remarkably capable, but a few things keep it from being for absolutely everyone: **the
