@@ -238,9 +238,14 @@ stored snippet on its own; the choice happens at save time.
   `Save as new`** branch. So this whole flow is a genuine build, and the default-body inversion is
   a real contradiction of the founder's stated model, worth confirming.
 - **Change.** Default the modal body to the edited span text. Add `Original` (read-only preview of
-  the stored body). Add the `Save as new` action beside `Update snippet`. After `Update snippet`,
-  the edited span relinks to the (now-updated) snippet as `linked`; after `Save as new`, the span
-  relinks to the new snippet.
+  the stored body). Add the `Save as new` action beside `Update snippet`. After either save, the
+  span relinks to the snippet it now reflects.
+- **The span's text is never rewritten from a modal edit** — the modal saves a *snippet*, it does
+  not edit your document. So the relinked state follows the invariant `linked` ⟺ the span's text
+  equals the stored body: usually `linked` (you saved exactly what the span shows), but
+  `linked-modified` if you edited the body *further inside the modal*, because then the span
+  genuinely no longer matches what was stored. Calling that state `linked` would be a lie the
+  tint tells.
 - **Judgment call (JC-3): `Original` previews, it does not revert.** `Original` is a non-destructive
   peek. Reverting the edit (discarding the user's changes back to the stored body) is a separate,
   clearly-labeled `Revert to original` action, because a one-click "Original" that silently threw
