@@ -126,6 +126,8 @@ Scan left-to-right:
 4. The same name is the **same variable everywhere** in a composed document — one fill value
    serves every occurrence across every inserted piece and typed text (this is the point:
    standardized names like `{task}` fill once).
+5. When the same name appears with differing defaults, **the first occurrence's default wins**
+   (consistent with first-appearance ordering everywhere else in this contract).
 
 Shared test vectors (both sides assert all of these):
 
@@ -141,6 +143,7 @@ Shared test vectors (both sides assert all of these):
 | `{x-1_Y}` | variable `x-1_Y` |
 | `{:x}` | literal — empty name |
 | `{{{task}}}` | literal `{` + variable `task` + literal `}` |
+| `{x:a} {x:b}` | one variable `x`, default `a` (first occurrence wins) |
 
 ## Copy output — the "as variable" toggle
 
