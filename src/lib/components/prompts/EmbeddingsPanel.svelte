@@ -9,11 +9,16 @@
   import { prompts, startEmbedDownload, toggleEmbedEnabled } from '$lib/prompts.svelte';
 
   const embed = $derived(prompts.embed);
+  // Per-stage progress (the pinned Channel shape): the runtime dylib
+  // downloads first, then the model — each percentage is within its stage.
   const pct = $derived.by(() => {
     const p = prompts.embedProgress;
     if (!p || !p.total_bytes) return 0;
     return Math.round((p.downloaded_bytes / p.total_bytes) * 100);
   });
+  const stageLabel = $derived(
+    prompts.embedProgress?.stage === 'model' ? 'model (2/2)' : 'ONNX runtime (1/2)'
+  );
 </script>
 
 <details class="embed-panel">
@@ -31,11 +36,11 @@
         Download model (~{embed.model_size_mb} MB)
       </button>
     {:else if embed.state === 'downloading'}
-      <p class="embed-panel__note">Downloading {embed.model_id}…</p>
+      <p class="embed-panel__note">Downloading {stageLabel}…</p>
       <div class="embed-panel__bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <div class="embed-panel__bar-fill" style="width: {pct}%"></div>
       </div>
-      <p class="embed-panel__pct">{pct}%</p>
+      <p class="embed-panel__pct">{stageLabel} — {pct}%</p>
     {:else if embed.state === 'ready' || embed.state === 'off'}
       <label class="embed-panel__toggle">
         <input

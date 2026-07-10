@@ -262,7 +262,7 @@ export async function refreshEmbedStatus(): Promise<void> {
 
 export async function startEmbedDownload(): Promise<void> {
   prompts.embedError = null;
-  prompts.embedProgress = { downloaded_bytes: 0, total_bytes: 0 };
+  prompts.embedProgress = { stage: 'runtime', downloaded_bytes: 0, total_bytes: 0 };
   if (prompts.embed) prompts.embed = { ...prompts.embed, state: 'downloading' };
   try {
     await embedDownload((p) => {

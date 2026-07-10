@@ -67,8 +67,13 @@ export interface EmbedStatus {
   error?: string;
 }
 
-/** Progress event streamed over the embed_download Channel. */
+/** Progress event streamed over the embed_download Channel (shape pinned at
+ *  Gate 2 for both lanes). The download covers two stages — the ONNX runtime
+ *  dylib, then the model — each reporting against its own total. Completion
+ *  and errors are NOT channel events: when the embed_download promise
+ *  settles, re-fetch embed_status and render from that. */
 export interface EmbedProgress {
+  stage: 'runtime' | 'model';
   downloaded_bytes: number;
   total_bytes: number;
 }

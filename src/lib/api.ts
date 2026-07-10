@@ -621,11 +621,21 @@ let devEmbed: EmbedStatus = {
 };
 
 async function devEmbedDownload(onProgress: (p: EmbedProgress) => void): Promise<void> {
-  const total = devEmbed.model_size_mb * 1024 * 1024;
   devEmbed.state = 'downloading';
-  for (let step = 1; step <= 10; step++) {
-    await new Promise((r) => setTimeout(r, 180));
-    onProgress({ downloaded_bytes: Math.round((total * step) / 10), total_bytes: total });
+  // Two stages with per-stage totals — the pinned Channel contract: the ONNX
+  // runtime dylib first, then the model itself. Completion is signaled by
+  // this promise resolving (callers re-fetch embed_status), never by a
+  // channel event.
+  const stages: { stage: EmbedProgress['stage']; totalMb: number }[] = [
+    { stage: 'runtime', totalMb: 30 },
+    { stage: 'model', totalMb: devEmbed.model_size_mb },
+  ];
+  for (const { stage, totalMb } of stages) {
+    const total = totalMb * 1024 * 1024;
+    for (let step = 1; step <= 6; step++) {
+      await new Promise((r) => setTimeout(r, 150));
+      onProgress({ stage, downloaded_bytes: Math.round((total * step) / 6), total_bytes: total });
+    }
   }
   devEmbed.state = 'ready';
 }
