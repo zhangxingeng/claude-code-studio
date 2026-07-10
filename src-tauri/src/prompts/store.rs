@@ -130,17 +130,33 @@ pub fn derive_placeholders(body: &str) -> Vec<Placeholder> {
     out
 }
 
-/// Load every piece in `dir`. A file that fails to parse is logged and
-/// skipped — never deleted or rewritten (the user's hand-edit stays intact on
-/// disk to fix; failing the whole library for one bad file would hide every
-/// other piece). Duplicate ids (hand-copied files): the file actually named
-/// `<id>.json` wins, others are logged and ignored. Sorted newest-updated
-/// first as a sensible default; callers re-rank as needed.
-pub fn load_pieces(dir: &Path) -> Result<Vec<Piece>, String> {
+/// A piece file the loader could not honor: broken JSON, or shadowed by a
+/// duplicate id. Surfaced to the UI via the `piece_load_errors` command —
+/// the hand-editing user (this feature's core persona) never sees stderr, so
+/// without this a broken comma makes a piece silently vanish from the
+/// library, which reads as data loss. The file itself always stays intact on
+/// disk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LoadError {
+    pub file: String,
+    pub error: String,
+}
+
+/// Load every piece in `dir`, collecting per-file errors. A file that fails
+/// to parse is reported and skipped — never deleted or rewritten (the user's
+/// hand-edit stays intact on disk to fix; failing the whole library for one
+/// bad file would hide every other piece). Duplicate ids (hand-copied files):
+/// the file actually named `<id>.json` wins, the shadowed ones are reported.
+/// Pieces sorted newest-updated first as a sensible default.
+pub fn scan_pieces(dir: &Path) -> Result<(Vec<Piece>, Vec<LoadError>), String> {
     if !dir.is_dir() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
-    let mut pieces: Vec<(Piece, bool)> = Vec::new(); // (piece, filename_is_canonical)
+    // (piece, filename_is_canonical, filename) — filename kept so a
+    // duplicate-id error can name the actual shadowed file, whichever scan
+    // order the two arrived in.
+    let mut pieces: Vec<(Piece, bool, String)> = Vec::new();
+    let mut errors: Vec<LoadError> = Vec::new();
     for entry in fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
         let path = entry.path();
         let Some(fname) = path.file_name().and_then(|n| n.to_str()) else {
@@ -155,23 +171,42 @@ pub fn load_pieces(dir: &Path) -> Result<Vec<Piece>, String> {
         {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[prompts] skipping unreadable piece file {fname}: {e}");
+                errors.push(LoadError { file: fname.to_string(), error: e });
                 continue;
             }
         };
         let canonical = fname == format!("{}.json", piece.id);
-        if let Some(existing) = pieces.iter_mut().find(|(p, _)| p.id == piece.id) {
-            eprintln!("[prompts] duplicate piece id {} in {fname}; canonical file wins", piece.id);
-            if canonical && !existing.1 {
-                *existing = (piece, true);
-            }
+        if let Some(existing) = pieces.iter_mut().find(|(p, _, _)| p.id == piece.id) {
+            // Winner: the canonically-named file, else first-seen.
+            let loser = if canonical && !existing.1 {
+                std::mem::replace(existing, (piece, true, fname.to_string())).2
+            } else {
+                fname.to_string()
+            };
+            let id = &existing.0.id;
+            errors.push(LoadError {
+                file: loser.clone(),
+                error: format!("duplicate piece id {id} — {} wins; {loser} is ignored", existing.2),
+            });
             continue;
         }
-        pieces.push((piece, canonical));
+        pieces.push((piece, canonical, fname.to_string()));
     }
-    let mut out: Vec<Piece> = pieces.into_iter().map(|(p, _)| p).collect();
+    let mut out: Vec<Piece> = pieces.into_iter().map(|(p, _, _)| p).collect();
     out.sort_by_key(|p| std::cmp::Reverse(p.updated_at));
-    Ok(out)
+    Ok((out, errors))
+}
+
+/// [`scan_pieces`] for callers that only need the pieces. Errors still land
+/// on stderr so headless contexts keep a trace; the UI-visible surface is the
+/// `piece_load_errors` command, which runs its own fresh scan (stateless —
+/// it can never serve stale errors from an earlier pass).
+pub fn load_pieces(dir: &Path) -> Result<Vec<Piece>, String> {
+    let (pieces, errors) = scan_pieces(dir)?;
+    for e in &errors {
+        eprintln!("[prompts] skipping piece file {}: {}", e.file, e.error);
+    }
+    Ok(pieces)
 }
 
 /// Create (no id) or update (id present) a piece. Versioning per the
@@ -361,10 +396,12 @@ mod tests {
     }
 
     #[test]
-    fn unparseable_file_is_skipped_and_left_untouched_on_disk() {
+    fn unparseable_file_is_skipped_surfaced_and_left_untouched_on_disk() {
         let dir = tmp_dir("surrogate");
         // Unpaired surrogate escape — invalid JSON string content; serde_json
-        // refuses it. The loader must skip the file, not corrupt or drop it.
+        // refuses it. The loader must skip the file, not corrupt or drop it —
+        // and must REPORT it (Gate-2 correction: a desktop user never sees
+        // stderr, so an unsurfaced skip reads as silent data loss).
         let bad = r#"{"id":"bad","title":"\ud800","body":"x","created_at":1,"updated_at":1}"#;
         fs::write(dir.join("bad.json"), bad).unwrap();
         fs::write(
@@ -373,14 +410,45 @@ mod tests {
         )
         .unwrap();
 
-        let pieces = load_pieces(&dir).unwrap();
+        let (pieces, errors) = scan_pieces(&dir).unwrap();
         assert_eq!(pieces.len(), 1, "good piece must still load");
         assert_eq!(pieces[0].id, "good");
+        assert_eq!(errors.len(), 1, "the broken file must be reported, not silently skipped");
+        assert_eq!(errors[0].file, "bad.json");
+        assert!(!errors[0].error.is_empty());
         assert_eq!(
             fs::read_to_string(dir.join("bad.json")).unwrap(),
             bad,
             "the bad file must stay byte-identical for the user to fix"
         );
+        // The pieces-only wrapper sees the same world minus the errors.
+        assert_eq!(load_pieces(&dir).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn shadowed_duplicate_is_reported_naming_the_loser_in_either_scan_order() {
+        let dir = tmp_dir("dupe-errors");
+        // Same id under a stale name and the canonical name. Whichever order
+        // read_dir yields them, the canonical file must win and the error
+        // must name the stale file as the ignored one.
+        fs::write(
+            dir.join("copy.json"),
+            r#"{"id":"x","title":"stale copy","body":"b","created_at":1,"updated_at":1}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("x.json"),
+            r#"{"id":"x","title":"canonical","body":"b","created_at":1,"updated_at":1}"#,
+        )
+        .unwrap();
+
+        let (pieces, errors) = scan_pieces(&dir).unwrap();
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].title, "canonical");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "copy.json", "the SHADOWED file is the one reported");
+        assert!(errors[0].error.contains("duplicate piece id x"));
         fs::remove_dir_all(&dir).unwrap();
     }
 

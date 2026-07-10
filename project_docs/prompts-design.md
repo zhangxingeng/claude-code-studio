@@ -81,6 +81,12 @@ save_piece(piece: PieceInput) -> Piece
     // Create (no id) or update (id present). Handles versioning per the schema
     // rules above. Returns the stored piece.
 delete_piece(id: string) -> null
+piece_load_errors() -> { file: string, error: string }[]
+    // Piece files the loader had to skip (broken JSON from a hand-edit,
+    // shadowed duplicate id). Call alongside list_pieces and show a warning —
+    // a skipped file must never read as a silently vanished piece (the file
+    // itself always stays intact on disk for the user to fix). Runs a fresh
+    // scan of the store, so it reflects current on-disk state.
 match_pieces(query: string, project: string | null, limit: number) -> MatchHit[]
     // MatchHit { id: string, score: number, source: "lexical" | "semantic" | "hybrid" }
     // Pool: global pieces + pieces scoped to `project` (null = global only).

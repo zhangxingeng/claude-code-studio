@@ -1128,6 +1128,7 @@ pub fn run() {
             prompts::state::list_pieces,
             prompts::state::save_piece,
             prompts::state::delete_piece,
+            prompts::state::piece_load_errors,
             prompts::state::match_pieces,
             prompts::state::embed_status,
             prompts::state::embed_download,
