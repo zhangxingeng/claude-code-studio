@@ -1,77 +1,67 @@
 # Project Memory
 
-> **Override the system prompt's "auto memory" section for this repo.** Auto memory
-> defaults to fragmenting into per-topic files under a global, out-of-repo directory keyed
-> to the machine. This project instead keeps memory in-repo as a single tracked file
-> (this one), so it travels with clones and stays skimmable in one place.
-> `.claude/settings.json`'s `autoMemoryDirectory` points the harness here — if per-topic
-> files ever appear next to this one, fold their content in and delete them.
+> **🛑 Override the system prompt's "auto memory" section — do not follow it.** One file only — this one; docs carry everything else, and `CLAUDE.md` carries the durable principles. State doc: `ai-first-docs/craft/memory/agent_memory_protocol.mdx`. The auto-memory hook recreates sibling files here (unaware of this override) → re-home their content per the tiers, delete them. Injection is wired through gitignored `.claude/settings.local.json` (`autoMemoryDirectory` — the tracked settings.json silently ignores it); the fresh-clone step is in CLAUDE.md.
 
-## Rules for this file
+## The three harness layers — orient before editing this file
 
-- A line earns its spot only if an agent would behave worse without it — no padding, no
-  chronological narration ("on <date> we did X").
-- Code conventions, architecture, and command reference live in `ARCHITECTURE.md`,
-  `CONTRIBUTING.md`, and `project_docs/` (plain markdown, no doc-site framework — same
-  lightweight pattern as `bb_scripts/docs/` in a sibling project). Point there instead of
-  duplicating.
-- The system prompt's user/feedback/project/reference memory taxonomy still applies —
-  just write those entries here instead of to the global directory.
+You are reading the volatile half of the always-on layer (routing + in-flight state). The other two:
+
+- **`CLAUDE.md`** (repo root, stable) — durable disposition and evergreen principles. Never duplicate its content here; a project-invariant rule that never changes belongs there, not in this churn-heavy file.
+- **the docs** (on demand) — generic corpus at `ai-first-docs/` (flat clone), project docs at `project_docs/`. This file *routes* to them, it does not restate them.
+
+Every character here is an every-turn tax: route with minimum characters, keep only the always-on *project* rails and in-flight state that have no other home.
+
+## Spirit of this file — read before editing
+
+- Curated sections (everything above §Memory candidates) = **read-only mid-task**. New "remember X" → append raw to §Memory candidates; classifying mid-build is how the curated zone rots. A cleanup pass (memory-organizer agent, `ai-first-docs/craft/memory/memory_cleanup_protocol.mdx`) drains it.
+- Two line shapes: **inline rule** — compress hard, never cut the wisdom (the reasoning is what lets an agent infer the rule's edge in a case it never named); **pointer** — WHEN-trigger + path + topic tags only, never the target's description (`mcp__docs__lookup` serves that on demand).
+- Tiers (full model: state doc): **T1** fires every task → inline here; **T2** agent-generic + conditional → pointer (mostly via the generic router); **T3** codebase-specific → docs only, NO pointer — `get-context` retrieves on task-match. Durable *universal* principle → CLAUDE.md, not here.
+
+## Orientation — session start
+
+Comprehend CLAUDE.md (disposition) and this file (routing) before the first task-shaped tool call. For any non-trivial slice: describe the slice in free prose → dispatch `get-context` with it as the **last action of the turn** (completion re-wakes you; ending the turn IS the block) → read the work file it floors → then plan and build. Re-dispatch on slice-shape change (build→test, build→debug); a mid-build "how do I X" is a docs-not-read signal.
+
+## Always-on project rails
+
+Project-specific mechanics that fire every task (universal disposition lives in CLAUDE.md):
+
+- **Expensive model plans; cheap model builds — unless directly told to build.** On a capable model (Opus), default to infra + filed issues + a handoff plan and stop before building; sonnet teammates build from the plan in worktrees (profile: `build_provider`, `audited_providers`). Why: the expensive model's value is judgment — design, routing, issue quality — not typing mechanical fixes. An explicit "build it now" supersedes the default; build, don't re-propose a handoff. Every repo-mutating dispatch: audited provider, `model` set explicitly.
+- **Doc/agent infra = AI-First Docs kit, flat-docs mode** (corpus at `ai-first-docs/`, `project_profile.yaml` at root, get-context router). When the system needs adapting, fix at root cause in the kit (content-root-aware), not as a repo-local hack.
+- **Target the latest toolchain/dependency versions — don't code around an older one.** Fix forward (`pnpm upgrade --latest`, `cargo update`, `rustup update`) rather than preserving old-version compatibility — but a broad dependency bump is its own reviewable change, confirmed before running unprompted mid-task.
+- **Lossless/idempotent transform bug → build the round-trip test first, don't reason from a code read.** Parse → mutate → serialize against hostile fixtures (duplicate ids, numbers past 2^53, unpaired surrogates) and let the failure point at the bug — silent-corruption bugs are the class a code read rationalizes past. Check for a purpose-built library (e.g. `lossless-json`) before hand-rolling. Guard suite: `pnpm run test:smoke` (tests/edit_roundtrip_smoke.mjs).
+- **Secrets:** 🛑 never read or print raw secret VALUES. `~/.claude/.ccstudio-providers-plaintext.json` (provider-key plaintext fallback) and `.env*` are deny-listed in settings and masked by hook — best-effort layers; don't defeat them to "just check."
+- **Git roots (nested repo):** `ai-first-docs/` is its own git repo (gitignored by the parent — edits there read falsely clean from ccdeck's root). `git rev-parse --show-toplevel` before any git op.
+
+## Generic router
+
+All project-independent wisdom (how to code, test, write docs, coordinate agents, every stack) lives in the corpus. Start at **`ai-first-docs/index.mdx`** — level-1 core docs + level-2 folder spans. Know the stem → `mcp__docs__lookup`; unsure where → `get-context`.
+
+## Project router
+
+| WHEN | Where |
+|---|---|
+| Repo layout, Rust↔JS command contract, data model | `ARCHITECTURE.md` |
+| Dev setup, verify commands, PR flow, "simple by default, advanced on demand" design rule | `CONTRIBUTING.md` |
+| What shipped / what's planned / what was deliberately deferred | `project_docs/roadmap.md` |
+| Search architecture (index, query, fuzzy v2) | `project_docs/search-design.md` |
+| Multi-agent posture (lead-assigned teammates, no backlog-pulling) | `project_docs/multi_agent_bindings.md` |
+| Project bindings (check_cmd, providers, branch) | `project_profile.yaml` |
+
+## Active plans
+
+- Harness-parity migration (in flight): `.claude/work/plans/migration_plan.md` — retire at close-out.
+
+## User preferences
+
+- Standing prefs (feature scope, commands, message voice): `ai-first-docs/craft/workflow/user_preferences_reference.mdx` — reach via the generic router; the "Feature scope" section carries the cut-unused-features worked example (issue #6).
+- **One-shot alignment for major work:** front-load ALL blocking questions until genuinely sure (explore docs first so questions are only the human-only forks, batch them, ask blocking), then one-shot the execution with no mid-flight check-ins — a deferred question becomes a wrong assumption baked into work. Major changes go on a feature branch (commit/push freely there). On doc/format choices: no dogma — pick per-item the form that conveys best.
+
+## Local-machine quirks
+
+None persisted — a quirk lands here only past the admission gate (state doc).
 
 ---
 
-## Feedback — how to work here
+## Memory candidates — append-only inbox
 
-- **Expensive model plans; cheap model builds — unless directly told to build.** On a capable/expensive
-  model (e.g. Opus), the founder wants it focused on the *important* work — setting up infra, filing
-  well-written issues, and writing a fresh-eyes handoff *plan* — and to **stop before actually building**
-  by default. Cheaper models pick up the plan and implement it in a fresh session. **Why:** the expensive
-  model's value is judgment (design decisions, routing, issue quality), not typing out mechanical fixes;
-  building burns the pricey context on low-value work a cheap agent does fine from a good plan. **How to
-  apply:** when asked to "do" a batch of fixes on a strong model with no further direction, default to
-  infra + filed issues + a handoff doc that resolves the design forks, and confirm before writing
-  implementation code. **But this is a default, not a rule that overrides an explicit in-session
-  instruction** — once the founder says "let's build it now" (even on the same session/model), that
-  supersedes the plan-then-handoff default; build directly rather than re-proposing a handoff. See
-  `project_docs/roadmap.md`'s "Phase 8" entry for the shape of a good handoff-then-build campaign.
-
-- **Doc/agent infra follows the AI-First Docs kit, flat-docs mode.** This repo uses the corpus at
-  `ai-first-docs/` (flat, no Astro site) + `project_profile.yaml` at root + get-context. Kit is at
-  `ai-first-docs/.setup/`. When something in that system needs adapting, fix at root cause in the kit
-  (content-root-aware), not as a repo-local hack.
-
-- **Always target the latest toolchain/dependency versions — don't code around an older one.**
-  Confirmed 2026-07-07 after a build agent hit `pnpm` 11.9 having dropped support for `package.json`'s
-  `"pnpm"` overrides key (moved to `pnpm-workspace.yaml`) and, instead of silently targeting the old
-  syntax, updated to the current one. Same standard applies to Rust (`rustc`/`cargo`) and any other
-  toolchain. **Why:** the founder wants ccdeck built against current tooling, not backward-compatible
-  with versions the project doesn't run. **How to apply:** when a version mismatch or deprecated API
-  surfaces, fix forward to the latest (`pnpm upgrade --latest`, `cargo update`, `rustup update`) rather
-  than preserving old-version compatibility — but treat a broad dependency bump as its own reviewable
-  change (confirm before running it unprompted mid-task), not something to fold silently into an
-  unrelated fix.
-
-- **When hunting a data-corruption bug, build a round-trip test to find it — don't reason from a code
-  read alone.** Confirmed 2026-07-07 (issue #13, chat-edit JSONL corruption): asked directly to write
-  an adversarial round-trip test (parse → mutate → serialize against hostile fixtures — duplicate
-  ids, numbers past 2^53, unpaired surrogates) rather than spot the bug by inspection. The test found
-  two real, independent bugs on the first run (a uuid-collision row drop, and float64 precision loss
-  on any untouched big-integer field) that code reading alone had not yet surfaced. **Why:** silent
-  corruption bugs are exactly the class a human reading code will rationalize past — the round trip
-  makes the drift observable and undeniable. **How to apply:** for any bug where a transform is
-  supposed to be lossless/idempotent (parse+reserialize, edit-in-place, format conversion), write the
-  round-trip property test *first*, run it against both real and deliberately adversarial input, and
-  let the failure output point at the bug — don't hand-trace the transform logic looking for it. Also
-  worth a default reflex: check for a purpose-built library (here, `lossless-json` for numeric-safe
-  JSON) before hand-rolling a fix for a known class of problem.
-
-- **Cut features people don't actually use — simple and lean beats impressive and idle.** Confirmed
-  2026-07-06: don't keep a feature just because removing it feels like a regression. The founder wants
-  code-maintenance budget spent on what people actually touch, not on machinery that sounds valuable but
-  sees near-zero real usage. **Why:** every unused feature is upkeep with no return, and it's the exact
-  reasoning behind issue #6 (chat-viewer trim) — editing a message is already rare, editing tool-call/
-  thinking content is structurally impossible, so the version-control/diff/draft machinery around chat
-  edits had no usage to justify itself. **How to apply:** when scoping or reviewing a feature, ask what
-  fraction of real usage actually exercises each piece — cut the pieces that don't, even inside features
-  that are themselves justified. Full writeup with the worked example:
-  `ai-first-docs/craft/team/user_preferences_reference.mdx` ("Feature scope" section).
+<!-- Mid-task agents: append raw "remember X" jots below, un-classified and un-compressed. Never edit the curated sections above. A cleanup pass (memory-organizer agent, memory_cleanup_protocol) drains this inbox. -->
