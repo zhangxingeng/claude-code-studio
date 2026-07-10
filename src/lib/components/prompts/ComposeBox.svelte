@@ -14,7 +14,7 @@
    * appears above the box while the caret is inside a linked span, or
    * double-clicking the span.
    */
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { prompts, composeEdit, setSelection } from '$lib/prompts.svelte';
   import { linkedSpanAt, spanStarts, diffTexts } from '$lib/compose/doc';
 
@@ -77,12 +77,15 @@
 
   // Restore focus + caret after the doc changed from outside the textarea
   // (match-panel insert, modal apply). Runs on mount too — focusing the
-  // empty box on view entry is the behavior we want anyway.
+  // empty box on view entry is the behavior we want anyway. The caret read
+  // is untracked: depending on it would re-run this on every selection
+  // change and collapse an in-progress mouse selection.
   $effect(() => {
     void prompts.focusNonce;
     if (!textareaEl) return;
+    const caret = untrack(() => prompts.caret);
     textareaEl.focus();
-    textareaEl.setSelectionRange(prompts.caret, prompts.caret);
+    textareaEl.setSelectionRange(caret, caret);
     syncScroll();
   });
 </script>
@@ -117,7 +120,7 @@
            tags would desync the two layers' text metrics. -->
       {#each renderSpans as s}{#if s.state === 'typed'}{s.text}{:else}<span
           class="compose__span compose__span--{s.state}"
-          title={s.title}>{s.text}</span>{/if}{/each}{'​'}
+          title={s.title}>{s.text}</span>{/if}{/each}{'​'}<!-- zero-width space: makes a trailing newline render a line, matching the textarea -->
     </div>
     <textarea
       bind:this={textareaEl}
