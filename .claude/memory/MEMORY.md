@@ -49,7 +49,7 @@ All project-independent wisdom (how to code, test, write docs, coordinate agents
 
 ## Active plans
 
-- None in flight.
+- **Awaiting user review/merge (2026-07-09):** `harness-parity` (this repo — the full harness migration, 15 commits) and `migration-protocol` (ai-first-docs repo — the new migration protocol + `.setup/migrate.md` + md→mdx lift). Both pushed, green, unmerged. Follow-ups filed: ai-first-docs#17 (flat-mode check-links), ai-first-docs#18 (upstream-merge candidates), ccdeck#23 (retire-nudge).
 
 ## User preferences
 
