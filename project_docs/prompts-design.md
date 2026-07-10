@@ -169,7 +169,9 @@ always resolves escapes (`{{`→`{`).
   The wrapper form `<prompt_var name="x">` is used (not `<x>`) because variable names may start
   with digits or hyphens, which are invalid XML element names.
 - **OFF** (substitute in place): each occurrence is replaced by user value, else default, else
-  the literal `{x}` stays — visible, so an unfilled variable is never silently blanked.
+  the **canonical** literal `{x}` stays (not the occurrence's original spelling — relevant when
+  a later occurrence carried a rule-5-ignored default) — visible, so an unfilled variable is
+  never silently blanked. Copy rendering is frontend-only; Rust never renders output.
 
 ## Rust ↔ JS command contract
 
