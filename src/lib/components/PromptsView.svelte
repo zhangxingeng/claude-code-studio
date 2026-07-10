@@ -24,7 +24,7 @@
   import PieceModal, { type PieceModalContext } from './prompts/PieceModal.svelte';
   import ProjectTabs from './prompts/ProjectTabs.svelte';
   import ProjectManagerPopover from './prompts/ProjectManagerPopover.svelte';
-  import EmbeddingsPanel from './prompts/EmbeddingsPanel.svelte';
+  import EmbeddingsPopover from './prompts/EmbeddingsPopover.svelte';
 
   let panelCollapsed = $state(false);
   let managerOpen = $state(false);
@@ -153,18 +153,20 @@
       <aside class="prompts-view__panel">
         <div class="prompts-view__panel-head">
           <span class="prompts-view__panel-title">Library</span>
-          <button
-            type="button"
-            class="btn btn--ghost btn--sm"
-            onclick={() => (panelCollapsed = true)}
-            title="Hide the library panel (distraction-free box)"
-            aria-label="Hide the library panel"
-          >
-            ⟨
-          </button>
+          <span class="prompts-view__panel-tools">
+            <EmbeddingsPopover />
+            <button
+              type="button"
+              class="btn btn--ghost btn--sm"
+              onclick={() => (panelCollapsed = true)}
+              title="Hide the library panel (distraction-free box)"
+              aria-label="Hide the library panel"
+            >
+              ⟨
+            </button>
+          </span>
         </div>
         <MatchPanel onInsert={handleInsert} />
-        <EmbeddingsPanel />
       </aside>
     {/if}
 
@@ -241,6 +243,11 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: 0.4rem;
+  }
+  .prompts-view__panel-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
   }
   .prompts-view__panel-peek {
     align-self: flex-start;
