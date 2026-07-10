@@ -3,13 +3,14 @@
 //!
 //! Rationale (prompts-design contract): `~/.claude` belongs to Claude Code —
 //! users audit it and other tools parse it. Everything ccdeck owns lives under
-//! its own root, and the two artifacts we historically parked in `~/.claude`
-//! (`.ccstudio-backups/`, `.ccstudio-config.json`) migrate out on startup.
-//! Invariant from here on: nothing ccdeck-owned lives under `~/.claude`.
+//! its own root, and the three artifacts we historically parked in `~/.claude`
+//! (`.ccstudio-backups/`, `.ccstudio-config.json`, `.ccstudio-index/`) migrate
+//! out on startup. Invariant from here on: nothing ccdeck-owned lives under
+//! `~/.claude`.
 //!
-//! Migration is NON-FATAL by design: backups and config are conveniences, not
-//! core data — the app must boot even if a rename fails (read paths fall back
-//! to whichever location has the file).
+//! Migration is NON-FATAL by design: backups/config are conveniences and the
+//! search index is a rebuildable cache, not core data — the app must boot even
+//! if a rename fails (read paths fall back, or the cache rebuilds).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,6 +40,12 @@ pub fn legacy_config_path(home: &Path) -> PathBuf {
     home.join(".claude").join(".ccstudio-config.json")
 }
 
+/// The legacy search-cache dir: `~/.claude/.ccstudio-index` (search.db +
+/// tantivy index + migration lock).
+pub fn legacy_index_dir(home: &Path) -> PathBuf {
+    home.join(".claude").join(".ccstudio-index")
+}
+
 /// Run the whole legacy migration once at startup. Never fails the boot:
 /// each step logs on error and the app continues (readers fall back to the
 /// legacy locations).
@@ -54,6 +61,9 @@ pub fn migrate_legacy_state() {
     }
     if let Err(e) = migrate_config_at(&legacy_config_path(&home), &root.join("config.json")) {
         eprintln!("[datadir] config migration incomplete ({e}); falling back to legacy reads");
+    }
+    if let Err(e) = migrate_index_at(&legacy_index_dir(&home), &root.join("index")) {
+        eprintln!("[datadir] search-cache migration incomplete ({e}); the index will rebuild");
     }
 }
 
@@ -111,6 +121,24 @@ fn migrate_config_at(legacy: &Path, new: &Path) -> Result<(), String> {
     }
     if new.exists() {
         return fs::remove_file(legacy).map_err(|e| e.to_string());
+    }
+    if let Some(parent) = new.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::rename(legacy, new).map_err(|e| e.to_string())
+}
+
+/// Move the legacy search cache to `new`. Simpler collision rule than
+/// backups/config because this artifact is REBUILDABLE (a wiped index just
+/// re-indexes on next launch): if both exist, delete the legacy one — merging
+/// caches is pointless and leaving it defeats the nothing-under-`~/.claude`
+/// invariant.
+fn migrate_index_at(legacy: &Path, new: &Path) -> Result<(), String> {
+    if !legacy.is_dir() {
+        return Ok(());
+    }
+    if new.exists() {
+        return fs::remove_dir_all(legacy).map_err(|e| e.to_string());
     }
     if let Some(parent) = new.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -233,6 +261,52 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&new).unwrap(), "new", "newer config must win");
         assert!(!legacy.exists(), "superseded legacy config must not linger under ~/.claude");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    // --- search-cache migration (audit M1) ---
+
+    #[test]
+    fn index_fresh_install_is_noop() {
+        let root = tmp_dir("idx-fresh");
+        assert!(migrate_index_at(&root.join("legacy"), &root.join("new")).is_ok());
+        assert!(!root.join("new").exists(), "no legacy dir must create nothing");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn index_legacy_only_is_renamed_whole() {
+        let root = tmp_dir("idx-legacy");
+        let legacy = root.join("legacy");
+        let new = root.join("deep").join("new"); // parent doesn't exist yet
+        fs::create_dir_all(legacy.join("tantivy")).unwrap();
+        fs::write(legacy.join("search.db"), "db").unwrap();
+
+        migrate_index_at(&legacy, &new).unwrap();
+
+        assert!(!legacy.exists(), "legacy cache dir must be gone");
+        assert_eq!(fs::read_to_string(new.join("search.db")).unwrap(), "db");
+        assert!(new.join("tantivy").is_dir());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn index_both_exist_deletes_legacy_cache() {
+        // Unlike backups (irreplaceable), a cache rebuilds — so the collision
+        // rule is deletion, not merge: keeping the legacy copy would defeat
+        // the nothing-under-~/.claude invariant for zero benefit.
+        let root = tmp_dir("idx-both");
+        let legacy = root.join("legacy");
+        let new = root.join("new");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("search.db"), "stale").unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(new.join("search.db"), "current").unwrap();
+
+        migrate_index_at(&legacy, &new).unwrap();
+
+        assert!(!legacy.exists(), "legacy cache must be deleted on collision");
+        assert_eq!(fs::read_to_string(new.join("search.db")).unwrap(), "current", "the live cache is untouched");
         fs::remove_dir_all(&root).unwrap();
     }
 }
