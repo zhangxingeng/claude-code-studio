@@ -191,8 +191,10 @@ pub struct LoadError {
 /// to parse is reported and skipped — never deleted or rewritten (the user's
 /// hand-edit stays intact on disk to fix; failing the whole library for one
 /// bad file would hide every other piece). Duplicate ids (hand-copied files):
-/// the file actually named `<id>.json` wins, the shadowed ones are reported.
-/// Pieces sorted newest-updated first as a sensible default.
+/// the file actually named `<id>.json` wins — else the lexicographically
+/// first filename (deterministic; write paths key off this view) — and the
+/// shadowed ones are reported. Pieces sorted newest-updated first as a
+/// sensible default.
 pub fn scan_pieces(
     dir: &Path,
     known_project_ids: Option<&HashSet<String>>,
@@ -228,9 +230,14 @@ pub fn scan_pieces(
         };
         let canonical = fname == format!("{}.json", piece.id);
         if let Some(existing) = pieces.iter_mut().find(|(p, _, _)| p.id == piece.id) {
-            // Winner: the canonically-named file, else first-seen.
-            let loser = if canonical && !existing.1 {
-                std::mem::replace(existing, (piece, true, fname.to_string())).2
+            // Winner: the canonically-named file; when NEITHER is canonical,
+            // the lexicographically-first filename (contract: a deterministic
+            // winner, never directory-iteration order — write paths key off
+            // this view, so a flaky winner is flaky data destruction).
+            let new_wins =
+                (canonical && !existing.1) || (!canonical && !existing.1 && *fname < *existing.2);
+            let loser = if new_wins {
+                std::mem::replace(existing, (piece, canonical, fname.to_string())).2
             } else {
                 fname.to_string()
             };
@@ -364,6 +371,17 @@ fn write_piece(dir: &Path, piece: &Piece) -> Result<(), String> {
     fs::rename(&tmp, dir.join(format!("{}.json", piece.id))).map_err(|e| e.to_string())
 }
 
+/// Does this file's content belong to piece `id` **in the loader's view**?
+/// Repair-aware on purpose (contract: every write path sees what the loader
+/// sees) — a strict-only check here lets a repairable twin hide from cleanup
+/// or survive a delete and resurrect the piece.
+fn file_holds_piece(path: &Path, fname: &str, id: &str) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| parse_piece(&s, fname, None).ok())
+        .is_some_and(|(p, _)| p.id == id)
+}
+
 /// After a save lands at `<id>.json`, drop any OTHER file carrying the same
 /// id (a hand-copied file with a stale name) — otherwise every such save
 /// spawns a duplicate that shadows future loads. Best-effort: a failure here
@@ -381,19 +399,18 @@ fn remove_stale_twins(dir: &Path, id: &str) {
         if fname == canonical || !fname.ends_with(".json") || fname.starts_with('.') {
             continue;
         }
-        let same_id = fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Piece>(&s).ok())
-            .is_some_and(|p| p.id == id);
-        if same_id {
+        if file_holds_piece(&path, fname, id) {
             let _ = fs::remove_file(&path);
         }
     }
 }
 
 /// Delete every file storing `id` — the canonical `<id>.json` (even if its
-/// content no longer parses) plus any stale-named twin. Idempotent: deleting
-/// an absent id is Ok, matching the command contract's `null` return.
+/// content no longer parses) plus any twin **the loader would recognize**,
+/// repairable ones included (contract: a destructive action must stick; a
+/// strict-only twin check left a repairable twin behind to resurrect the
+/// piece on the next load). Idempotent: deleting an absent id is Ok,
+/// matching the command contract's `null` return.
 pub fn delete_piece_at(dir: &Path, id: &str) -> Result<(), String> {
     if !dir.is_dir() {
         return Ok(());
@@ -410,11 +427,7 @@ pub fn delete_piece_at(dir: &Path, id: &str) -> Result<(), String> {
         if !fname.ends_with(".json") || fname.starts_with('.') {
             continue;
         }
-        let same_id = fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Piece>(&s).ok())
-            .is_some_and(|p| p.id == id);
-        if same_id {
+        if file_holds_piece(&path, fname, id) {
             fs::remove_file(&path).map_err(|e| e.to_string())?;
         }
     }
@@ -430,41 +443,29 @@ pub fn save_piece(input: PieceInput) -> Result<Piece, String> {
 /// semantics (contract: nothing a user wrote ever vanishes as a side effect;
 /// the pieces surface again under Global). Metadata-only by design: no
 /// version push, `updated_at` untouched — the user changed nothing about the
-/// piece itself. Only cleanly-parsed files are rewritten; a broken file is
-/// never repaired-and-rewritten as a side effect of deleting a project — it
-/// degrades safely later via the unknown-project fallback once the roster
-/// entry is gone.
+/// piece itself.
+///
+/// Operates on [`scan_pieces`]' view (contract: every write path sees what
+/// the loader sees — repair-aware, canonical-filename-wins, deterministic).
+/// A parallel stricter parse here once picked a stale twin as "the piece"
+/// and overwrote the canonical body with it (audit MED). A winner the loader
+/// flags `recovered` is skipped entirely: a delete-project side effect must
+/// never bake an unsaved repair — the file stays byte-identical and surfaces
+/// under Global via the dangling-id fallback once the roster entry is gone.
 pub fn rescope_project_pieces(dir: &Path, project_id: &str) -> Result<(), String> {
     if !dir.is_dir() {
         return Ok(());
     }
     let target = Scope::Project { project_id: project_id.to_string() };
-    // Collect first, write after: rewriting (and twin-cleaning) while
-    // read_dir is still iterating makes the listing platform-dependent.
-    let mut to_rescope: Vec<Piece> = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
-        let path = entry.path();
-        let Some(fname) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !fname.ends_with(".json") || fname.starts_with('.') {
+    let (pieces, _notices) = scan_pieces(dir, None)?;
+    for mut piece in pieces {
+        if piece.scope != target || piece.recovered {
             continue;
         }
-        let Ok(content) = fs::read_to_string(&path) else {
-            continue; // unreadable → handled by the load-error surface
-        };
-        let Ok(piece) = serde_json::from_str::<Piece>(&content) else {
-            continue; // broken/legacy → the dangling-id fallback covers it
-        };
-        if piece.scope == target && !to_rescope.iter().any(|p| p.id == piece.id) {
-            to_rescope.push(piece);
-        }
-    }
-    for mut piece in to_rescope {
         piece.scope = Scope::Global;
         write_piece(dir, &piece)?;
-        // A piece that lived only in a stale-named file now has a canonical
-        // twin — clean up exactly as a save does.
+        // The winner now lives canonically; superseded twins are cleaned
+        // exactly as a save does.
         remove_stale_twins(dir, &piece.id);
     }
     Ok(())
@@ -930,6 +931,117 @@ mod tests {
             Scope::Project { project_id: "different".into() },
             "other projects' pieces untouched"
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rescope_operates_on_the_loaders_view_never_a_stale_twin() {
+        // Audit MED 1: the loader's winner for id x is the canonical x.json
+        // (repairable → recovered); the stale twin parses strictly. A rescope
+        // parsing more strictly than the loader sees ONLY the twin and
+        // overwrites the canonical body with it — nondeterministic data
+        // destruction inside delete-project, whose whole contract is
+        // "nothing vanishes". Post-fix: the loader's winner rules; a
+        // recovered winner is skipped entirely (a delete-project side effect
+        // must never bake an unsaved repair), so NOTHING is written.
+        let dir = tmp_dir("rescope-twin");
+        let canonical = r#"{"id":"x","title":"t","body":"precious","created_at":1,"updated_at":9,"scope":{"kind":"project","project_id":"target"},}"#; // trailing comma: repair-only
+        let twin = r#"{"id":"x","title":"t","body":"stale","created_at":1,"updated_at":1,"scope":{"kind":"project","project_id":"target"}}"#;
+        fs::write(dir.join("x.json"), canonical).unwrap();
+        fs::write(dir.join("copy.json"), twin).unwrap();
+
+        rescope_project_pieces(&dir, "target").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dir.join("x.json")).unwrap(),
+            canonical,
+            "the canonical (loader-winner) file must never be overwritten from a twin"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("copy.json")).unwrap(),
+            twin,
+            "skipping the recovered winner means no writes at all for this id"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rescope_canonical_winner_survives_with_both_twins_parseable() {
+        // Same rule with both files strictly parseable: the canonical body
+        // must survive rescope whichever order read_dir yields the two.
+        let dir = tmp_dir("rescope-twin2");
+        fs::write(
+            dir.join("x.json"),
+            r#"{"id":"x","title":"t","body":"canonical-body","created_at":1,"updated_at":9,"scope":{"kind":"project","project_id":"target"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("copy.json"),
+            r#"{"id":"x","title":"t","body":"stale","created_at":1,"updated_at":1,"scope":{"kind":"project","project_id":"target"}}"#,
+        )
+        .unwrap();
+
+        rescope_project_pieces(&dir, "target").unwrap();
+
+        let pieces = load_pieces(&dir, None).unwrap();
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].body, "canonical-body", "loader-winner content survives");
+        assert_eq!(pieces[0].scope, Scope::Global);
+        assert!(!dir.join("copy.json").exists(), "the superseded twin is cleaned up");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn delete_removes_repairable_twins_so_the_delete_sticks() {
+        // Audit MED 2: the loader recognizes a repairable twin as this piece,
+        // so a delete that only strict-parses leaves it behind — and the
+        // "deleted" piece resurrects (recovered) on the next load. A
+        // destructive action must stick.
+        let dir = tmp_dir("delete-repairable-twin");
+        fs::write(
+            dir.join("x.json"),
+            r#"{"id":"x","title":"t","body":"b","created_at":1,"updated_at":1}"#,
+        )
+        .unwrap();
+        // Trailing comma: strict parse fails, the loader's parse yields id x.
+        fs::write(
+            dir.join("twin.json"),
+            r#"{"id":"x","title":"t","body":"b","created_at":1,"updated_at":1,}"#,
+        )
+        .unwrap();
+
+        delete_piece_at(&dir, "x").unwrap();
+
+        assert!(!dir.join("twin.json").exists(), "the repairable twin must go too");
+        assert!(
+            load_pieces(&dir, None).unwrap().is_empty(),
+            "no file may resurrect the deleted piece"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_canonical_twin_tie_resolves_lexicographically() {
+        // Audit LOW: when neither same-id file is canonically named, the
+        // winner is deterministic — lexicographic filename order — never
+        // directory-iteration order.
+        let dir = tmp_dir("lex-tie");
+        fs::write(
+            dir.join("bbb.json"),
+            r#"{"id":"x","title":"from-bbb","body":"b","created_at":1,"updated_at":1}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("aaa.json"),
+            r#"{"id":"x","title":"from-aaa","body":"b","created_at":1,"updated_at":1}"#,
+        )
+        .unwrap();
+
+        let (pieces, errors) = scan_pieces(&dir, None).unwrap();
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].title, "from-aaa", "lexicographically first filename wins");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "bbb.json", "the loser is the one reported");
         fs::remove_dir_all(&dir).unwrap();
     }
 
