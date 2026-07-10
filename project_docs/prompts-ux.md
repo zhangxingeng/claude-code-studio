@@ -116,18 +116,27 @@ with the keyboard and it drops in.
   **appends at the caret** (`composeInsertPiece`), it does not replace the query line. So today the
   founder's "arrow and enter, no mouse" is impossible end-to-end.
 - **Change.**
-  - `↓` from the box (when the panel has hits and the caret is at the end of a non-empty query
-    line) moves focus to the first hit. This is the *only* auto-capture of a key the box would
-    otherwise own, and it is safe because `↓` at end-of-text is inert in a textarea.
+  - `↓` from the box moves focus to the first hit **only when the caret sits at the very end of
+    the text and the panel has hits** — the one position where `↓` is natively inert in a
+    textarea. Anywhere else `↓` moves the caret down a line, as it must: a user editing line 3 of
+    a 10-line prompt would be rightly furious to have the arrow key stolen. Composing happens at
+    the end, so this covers the real flow; mid-document insert stays a mouse click, a known and
+    accepted gap.
   - `Enter` on a highlighted hit inserts. `Enter` in the box stays a newline.
   - Insert **replaces the query line** (`caretQuery`'s span: from the current line start to the
     caret) rather than appending. Rationale: the query text was scaffolding to find the snippet;
     leaving it in front of the inserted body is litter the user then has to delete.
   - `Esc` in the panel returns to the box without inserting.
 - **Judgment call (JC-2).** Enter-inserts only *after* an explicit `↓` step into the panel; the
-  first hit is not pre-armed to swallow Enter while the caret is still in the box. Overrule
-  option: auto-arm the first hit so `Enter` inserts without the `↓` — rejected here because it
-  steals the newline key mid-compose, but it is a one-line change if the founder wants it.
+  first hit is not pre-armed to swallow Enter while the caret is still in the box. Auto-arming the
+  first hit was rejected because it steals the newline key mid-compose.
+
+  **JC-2 and query-line replacement are one decision, not two.** `caretQuery` treats the *entire*
+  current line as the query, so an insert that replaces the query line also deletes whatever prose
+  shares that line. That is safe only because the user opted in by stepping into the panel. Auto-arm
+  the first hit and a stray `Enter` at the end of an ordinary sentence swallows the sentence. So if
+  JC-2 is overruled, insert must **append at the caret** rather than replace — the two rules stand
+  or fall together.
 
 ### S3. Insert by mouse (the equivalence)
 
@@ -163,14 +172,20 @@ choice**, not one switch over the whole prompt.
   (`copyText`) takes a per-name ON/OFF map instead of one boolean. See
   [Contract implications](#contract-implications) — this kills the `promptsAsVariable` AppConfig
   field and changes the copy API's signature.
-- **Judgment call (JC-1): the sensible default.** The founder's rationale is that as-variable
-  exists to avoid *repeating long content*; short values should just substitute. So a variable
-  defaults **ON when its resolved value is multi-line or longer than ~80 characters, OFF
-  otherwise** — the default matches the reason the feature exists, and the user overrides the few
-  edge cases by hand. Overrule options: (a) default all OFF (simplest, but re-introduces long-value
-  repetition the founder dislikes); (b) default all ON (today's behavior, but noisy `<prompt_var>`
-  wrappers around one-word values). This default is per-document session state; it is **not**
-  written back to the snippet (see [Open questions](#open-questions-for-the-founder) OQ-3).
+- **Judgment call (JC-1): the default keys off repetition, not length.** As-variable exists to
+  avoid *repeating* content — the founder's words: *"repeating would be purely wasting context."*
+  A variable that appears **once** costs strictly more as `<prompt_var name="x"/>` plus a block
+  entry than it does substituted in place, however long its value. So: **a variable defaults ON
+  when it occurs more than once in the document, OFF when it occurs once.** One sentence, and it is
+  exactly the reason the feature exists.
+
+  A length-based default ("ON when the value is long") was the first instinct and is wrong twice
+  over: it pays the wrapper cost for a long value used once, and it keys off the *resolved value*,
+  which changes as the user types into the fill input — the toggle would flip under their fingers.
+  Occurrence count is stable. The default is computed **once, when the variable enters the list**,
+  and never re-flips on its own; the moment the user touches a toggle, it is theirs. Overrule
+  options: all-OFF, or all-ON (today's behavior, but it wraps one-word values in XML noise). This
+  state is per-session, never written back to the snippet ([JC-9](#judgment-calls-collected)).
 
 ### S5. Save the whole box
 
@@ -258,10 +273,13 @@ stored snippet on its own; the choice happens at save time.
   - With **no selection** → `Ctrl+C` copies the full composed prompt (the `Copy prompt` output)
     and shows the 5s toast. This is dead key-space natively (nothing is selected to copy), so we
     fill it without a fight.
-- **Judgment call (JC-4).** This selection-aware split is the recommendation, but `Ctrl+C` for
-  full-prompt copy is inherently ambiguous to some users. Overrule option: bind full-prompt copy
-  to an unambiguous chord (`Ctrl/Cmd+Shift+C`) and leave `Ctrl+C` fully native. The hotkey map
-  below ships both so the founder can pick by feel.
+- **Judgment call (JC-4).** Ship **one** binding, not two. The selection-aware `Ctrl/Cmd+C` above
+  is the recommendation: it is the key the hand already reaches for, and it claims only the
+  key-space the OS leaves empty. Overrule option: leave `Ctrl+C` entirely native and bind
+  full-prompt copy to `Ctrl/Cmd+Shift+C` instead — though that chord opens Chrome's element
+  inspector, so it is clean inside the packaged app and contested in browser dev mode. Shipping
+  both was rejected: two keys for one command is idle capability that reads as thoughtful and is
+  really just upkeep. Whichever wins, the other is a rebind away.
 
 ### S10. Open and close the popovers
 
@@ -340,7 +358,7 @@ and takes precedence.
 | Action | Default | Notes |
 |---|---|---|
 | Copy full prompt | `Ctrl/Cmd+C` (no selection) | Selection-aware — native copy wins when text is selected ([S9](#s9-copy--button-and-hotkey)). |
-| Copy full prompt (unambiguous) | `Ctrl/Cmd+Shift+C` | Always full-prompt, regardless of selection. Ships alongside so `Ctrl+C` can stay native if the founder prefers. |
+| Copy full prompt (alternative) | `Ctrl/Cmd+Shift+C` | Only if [JC-4](#s9-copy--button-and-hotkey) is overruled — **replaces** the row above, never ships beside it. Contested by Chrome's inspector in dev mode. |
 | Save as… | `Ctrl/Cmd+S` | Selection-aware ([S5](#s5-save-the-whole-box)/[S6](#s6-save-a-selection)). Must `preventDefault` — the browser owns `Ctrl+S`. |
 | Step into match panel | `↓` at end of query line | Not user-rebindable — it is a spatial nav key, not a command ([S2](#s2-newline-search--arrow--enter-insert)). |
 | Insert highlighted snippet | `Enter` (in panel) | Context key, not rebindable. |
@@ -414,8 +432,8 @@ contract from this list; nothing here is built until it lands there.
    AppConfig field is **removed** (backend `appconfig.rs` + frontend `AppConfig` type + the dev
    fallback in `api.ts`). `copyText` changes signature from `(text, fills, asVariable: boolean)` to
    take a **per-name ON/OFF map** (e.g. `asVars: Record<string, boolean>`). The Rust side, which
-   never renders copy output, is unaffected — copy stays frontend-only. Document the smart default
-   (JC-1) as the seam both the fill list and the copy builder read.
+   never renders copy output, is unaffected — copy stays frontend-only. Document the
+   occurrence-based default (JC-1) as the seam both the fill list and the copy builder read.
 2. **`piece` → `snippet` rename** touches the command names (`list_pieces`, `save_piece`,
    `delete_piece`, `piece_load_errors`, `MatchHit`/`Piece` types), the schema field references in
    §Piece schema, storage-path prose (`prompts/` file comments say "piece"), and all UI copy. One
@@ -454,30 +472,37 @@ authorized to make, not a fork I need him to resolve.
   "config lives in a popover"; overrule if the founder wants matching settings kept in the library
   panel where they are today. [S10](#s10-open-and-close-the-popovers)
 
+- **JC-7 — `Update snippet` does not re-sync other inserted copies.** Spans stay point-in-time
+  snapshots (the tint marks origin, not liveness), so updating a snippet leaves a second copy of
+  it in the box showing the old text. A quiet toast — *"2 other inserted copies left unchanged"* —
+  keeps that from being a silent surprise. Overrule: re-sync every live span of that id.
+  [S7](#s7-edit-a-linked-snippet-inline-then-save--update-vs-save-as-new)
+
+- **JC-8 — the rebinding UI ships minimal**: per-row change/reset, inline conflict rejection. No
+  conflict graph, no keymap import/export until someone actually wants one. [Hotkeys](#hotkey-map)
+
+- **JC-9 — as-var state is session-only**, never persisted to the snippet schema. The
+  occurrence-based default ([JC-1](#s4-fill-variables-per-variable-toggle)) already picks right
+  most of the time; a per-placeholder `as_var` hint earns its schema change only if re-toggling
+  turns out to annoy in practice. [S4](#s4-fill-variables-per-variable-toggle)
+
 ---
 
 ## Open questions for the founder
 
-Genuine forks I can't resolve without you — each a concrete either/or with a recommendation.
+**None block the build.** The forks the first draft left open are resolved above as JC-7…JC-9, each
+cheap to overrule — this doc's review *is* the gate, so a call made here costs nothing to reverse
+and costs a build round if it is deferred.
 
-1. **OQ-1 — When `Update snippet` writes an edit back, should *other* copies of that snippet
-   already sitting in the box update too?** Today spans are point-in-time snapshots that never
-   re-sync (a deliberate lead ruling: the tint marks origin, not liveness). Keeping that means if
-   you inserted a snippet twice, editing-and-updating one leaves the other showing the old text.
-   *Recommendation: keep point-in-time (don't re-sync), and show a quiet toast "2 other inserted
-   copies left unchanged" so it's never a silent surprise.* Alternative: make `Update snippet`
-   re-sync every live span of that id.
+Two are worth your eye specifically, because they encode *your* reasoning rather than mine:
 
-2. **OQ-2 — How deep should the rebinding UI go this round?** *Recommendation: ship the minimal
-   per-row change/reset with inline conflict rejection (above), and defer any conflict-graph or
-   import/export of keymaps.* Alternative: full keymap editor now.
-
-3. **OQ-3 — Should a variable's as-var ON/OFF stick to the snippet, or stay session-only?** If a
-   snippet's `{task}` is "always long," persisting ON to the snippet would save re-toggling.
-   *Recommendation: session-only this round (keep the snippet schema clean; the smart default
-   already gets it right most of the time).* Alternative: add an optional per-placeholder
-   `as_var` hint to the snippet schema — a schema change, so it needs your call before it's a
-   contract edit.
+- **[JC-1](#s4-fill-variables-per-variable-toggle)** — a variable defaults to as-var when it occurs
+  more than once. This reads your "don't repeat verbose content" rationale literally. If what you
+  actually wanted is *"long values get the XML wrapper even when used once"* — because the wrapper
+  also tells the model "this is a parameter" — say so, and the rule changes.
+- **[JC-6](#s10-open-and-close-the-popovers)** — folding the semantic-matching controls into one
+  settings popover above the compose box. Your words were "the setting popover should be above the
+  compose box," which reads as relocation; this goes further and consolidates. Easy to split back.
 
 ---
 
