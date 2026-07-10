@@ -144,6 +144,8 @@ Shared test vectors (both sides assert all of these):
 | `{:x}` | literal — empty name |
 | `{{{task}}}` | literal `{` + variable `task` + literal `}` |
 | `{x:a} {x:b}` | one variable `x`, default `a` (first occurrence wins) |
+| `{x} {x:b}` | one variable `x`, **no** default (rule 5 reads plainly: the first occurrence wins even when it carries no default — predictability over helpfulness) |
+| `{a:{b}}` | literal `{a:` + variable `b` + literal `}` (a failed variable run consumes nothing; scanning resumes within it, same shape as `{{{task}}}`) |
 
 ## Copy output — the "as variable" toggle
 
