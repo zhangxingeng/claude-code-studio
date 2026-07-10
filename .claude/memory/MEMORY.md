@@ -49,7 +49,7 @@ All project-independent wisdom (how to code, test, write docs, coordinate agents
 
 ## Active plans
 
-- Harness-parity migration (in flight): `.claude/work/plans/migration_plan.md` — retire at close-out.
+- None in flight.
 
 ## User preferences
 
