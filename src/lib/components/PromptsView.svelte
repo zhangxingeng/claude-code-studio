@@ -12,17 +12,21 @@
     prompts,
     initPrompts,
     disposePrompts,
-    setActiveProject,
+    activeProject,
     composeInsertPiece,
     copyOutput,
   } from '$lib/prompts.svelte';
+  import { projectColorVar } from '$lib/prompts/palette';
   import { copyToClipboard } from '$lib/copy';
   import ComposeBox from './prompts/ComposeBox.svelte';
   import MatchPanel from './prompts/MatchPanel.svelte';
   import PieceModal, { type PieceModalContext } from './prompts/PieceModal.svelte';
+  import ProjectTabs from './prompts/ProjectTabs.svelte';
+  import ProjectManagerPopover from './prompts/ProjectManagerPopover.svelte';
   import EmbeddingsPanel from './prompts/EmbeddingsPanel.svelte';
 
   let panelCollapsed = $state(false);
+  let managerOpen = $state(false);
   // Dismissal is per-mount on purpose: the broken files are still broken on
   // the next visit, and a data-loss warning that never comes back would
   // itself be the silent loss it exists to prevent.
@@ -33,6 +37,13 @@
 
   const hasSelection = $derived(prompts.selEnd > prompts.selStart);
   const hasText = $derived(prompts.doc.text.length > 0);
+  /** The active tab's hue enters the CSS world here, once — everything
+   *  below styles with color-mix over --project-color (unset on Global,
+   *  so every fill falls back to its neutral). */
+  const tintStyle = $derived.by(() => {
+    const active = activeProject();
+    return active ? `--project-color: ${projectColorVar(active.color)}` : '';
+  });
   /** Loader-repaired pieces (transient flag): fine to use, but the repair
    *  persists only on an explicit re-save — worth a quiet nudge. */
   const recoveredPieces = $derived(prompts.pieces.filter((p) => p.recovered));
@@ -82,7 +93,14 @@
   }
 </script>
 
-<div class="prompts-view">
+<div class="prompts-view" style={tintStyle}>
+  <div class="prompts-view__tabs">
+    <ProjectTabs onOpenManager={() => (managerOpen = !managerOpen)} />
+    {#if managerOpen}
+      <ProjectManagerPopover onClose={() => (managerOpen = false)} />
+    {/if}
+  </div>
+
   <div class="prompts-view__toolbar">
     <button
       type="button"
@@ -92,21 +110,6 @@
     >
       {panelCollapsed ? '⟩ Library' : '⟨ Hide library'}
     </button>
-
-    <!-- Interim scope picker — replaced by the project tab row in the next
-         slice of this round (tabs + manager popover). -->
-    <label class="prompts-view__project">
-      <span>Project</span>
-      <select
-        value={prompts.activeProjectId ?? ''}
-        onchange={(e) => setActiveProject(e.currentTarget.value || null)}
-      >
-        <option value="">Global</option>
-        {#each prompts.projects as p (p.id)}
-          <option value={p.id}>{p.name}</option>
-        {/each}
-      </select>
-    </label>
 
     <span class="prompts-view__spacer"></span>
 
@@ -218,28 +221,14 @@
     min-height: calc(100vh - var(--header-h) - 9rem);
   }
 
+  .prompts-view__tabs {
+    position: relative; /* anchors the project-manager popover */
+  }
   .prompts-view__toolbar {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
-  }
-  .prompts-view__project {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.72rem;
-    color: var(--text-muted);
-  }
-  .prompts-view__project select {
-    font-family: inherit;
-    font-size: 0.75rem;
-    padding: 0.25rem 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: 0.35rem;
-    background: var(--bg-card);
-    color: var(--text);
-    max-width: 16rem;
   }
   .prompts-view__spacer { flex: 1; }
 

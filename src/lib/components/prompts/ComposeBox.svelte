@@ -17,6 +17,7 @@
   import { onMount, untrack } from 'svelte';
   import { prompts, composeEdit, setSelection } from '$lib/prompts.svelte';
   import { linkedSpanAt, spanStarts, diffTexts } from '$lib/compose/doc';
+  import { projectColorVar } from '$lib/prompts/palette';
   import VariableFillList from './VariableFillList.svelte';
 
   let {
@@ -29,14 +30,26 @@
   let textareaEl: HTMLTextAreaElement | undefined = $state(undefined);
   let highlightEl: HTMLDivElement | undefined = $state(undefined);
 
-  /** Highlight-layer render list: span state + its slice of the text. */
+  /** Highlight-layer render list: span state, its slice of the text, and
+   *  its hue — greyish for global pieces, the OWNING project's color for
+   *  project pieces (a span keeps its own hue even under another tab). */
   const renderSpans = $derived.by(() => {
     const starts = spanStarts(prompts.doc);
-    return prompts.doc.spans.map((s, i) => ({
-      state: s.state,
-      title: s.link ? `${s.link.title} · ${s.link.scope.kind}` : '',
-      text: prompts.doc.text.slice(starts[i], starts[i] + s.length),
-    }));
+    return prompts.doc.spans.map((s, i) => {
+      const scope = s.link?.scope;
+      const project =
+        scope?.kind === 'project'
+          ? prompts.projects.find((p) => p.id === scope.project_id)
+          : undefined;
+      return {
+        state: s.state,
+        // A roster miss (project deleted since insert) falls back to the
+        // greyish global treatment rather than an unstyled hole.
+        colorVar: project ? projectColorVar(project.color) : null,
+        title: s.link ? `${s.link.title} · ${project ? project.name : 'global'}` : '',
+        text: prompts.doc.text.slice(starts[i], starts[i] + s.length),
+      };
+    });
   });
 
   /** The linked span the caret sits in — drives the edit-affordance chip. */
@@ -121,6 +134,8 @@
            tags would desync the two layers' text metrics. -->
       {#each renderSpans as s}{#if s.state === 'typed'}{s.text}{:else}<span
           class="compose__span compose__span--{s.state}"
+          class:compose__span--project={s.colorVar !== null}
+          style={s.colorVar ? `--span-color: ${s.colorVar}` : null}
           title={s.title}>{s.text}</span>{/if}{/each}{'​'}<!-- zero-width space: makes a trailing newline render a line, matching the textarea -->
     </div>
     <textarea
@@ -224,7 +239,10 @@
   .compose__highlight {
     position: absolute;
     inset: 0;
-    background: var(--bg-card);
+    /* The contract's contained tint: a faint hint of the active project's
+       color, mixed over the card surface — Global (no --project-color)
+       resolves to the plain card. The tint lives HERE and nowhere else. */
+    background: color-mix(in srgb, var(--project-color, var(--bg-card)) 5%, var(--bg-card));
     color: transparent;
     border-color: var(--border);
     pointer-events: none;
@@ -244,20 +262,30 @@
   }
   .compose__input:focus {
     outline: none;
-    border-color: var(--accent-piece);
+    border-color: color-mix(in srgb, var(--project-color, var(--accent-piece)) 55%, var(--border));
+  }
+  /* Selection reads as a highlighter stroke: bright marker, dark ink — the
+     pair is scoped to the compose surface only. */
+  .compose__input::selection {
+    background: var(--highlight);
+    color: var(--highlight-foreground);
   }
 
-  /* Provenance tints paint on the back layer, behind the real text. The
-     linked-modified marker is a dotted underline drawn as a border — the
-     design's "tint + subtle marker" (same hue family; the marker carries
-     the difference, per issue #7 F1). */
-  .compose__span--linked {
-    background: color-mix(in srgb, var(--accent-piece) 16%, transparent);
+  /* Provenance tints paint on the back layer, behind the real text:
+     greyish translucent for global pieces, a darker translucent mix of the
+     OWNING project's hue for project pieces (--span-color set per span).
+     The linked-modified marker is a dotted underline drawn as a border —
+     "tint + subtle marker", same hue family (issue #7 F1). */
+  .compose__span--linked,
+  .compose__span--linked-modified {
+    background: color-mix(in srgb, var(--span-color, var(--text-faint)) 15%, transparent);
     border-radius: 2px;
   }
+  .compose__span--project.compose__span--linked,
+  .compose__span--project.compose__span--linked-modified {
+    background: color-mix(in srgb, var(--span-color) 24%, transparent);
+  }
   .compose__span--linked-modified {
-    background: color-mix(in srgb, var(--accent-piece) 16%, transparent);
-    border-bottom: 2px dotted var(--accent-piece);
-    border-radius: 2px;
+    border-bottom: 2px dotted color-mix(in srgb, var(--span-color, var(--text-faint)) 75%, transparent);
   }
 </style>
