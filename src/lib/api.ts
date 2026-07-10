@@ -16,6 +16,14 @@ import type {
   ProviderProfile,
   KeyBackend,
 } from './types';
+import type {
+  Piece,
+  PieceInput,
+  PieceLoadError,
+  MatchHit,
+  EmbedStatus,
+  EmbedProgress,
+} from './prompts/types';
 
 // Bundled mock fixtures for browser-dev mode (Vite ?raw import).
 import mockSession from '../../tests/mock_data/session.jsonl?raw';
@@ -394,6 +402,259 @@ export async function refreshIndex(): Promise<IndexStatus | null> {
 export async function indexStatus(): Promise<IndexStatus | null> {
   if (!isTauri()) return null;
   return call<IndexStatus>('index_status');
+}
+
+// ---------------------------------------------------------------------------
+// Prompt Library (issue #24) — pieces, matching, opt-in embeddings.
+// Contract: project_docs/prompts-design.md. All payloads are serde-default
+// snake_case, like SessionMeta.
+// ---------------------------------------------------------------------------
+
+/** List every piece in the store (the corpus is small by design — the
+ *  frontend filters by scope/project). */
+export async function listPieces(): Promise<Piece[]> {
+  if (!isTauri()) return devPieces.map((p) => structuredClone(p));
+  return call<Piece[]>('list_pieces');
+}
+
+/** Create (no id) or update (id present) a piece. The backend owns derived
+ *  fields: placeholders re-derived from the body, `versions` gets the prior
+ *  body pushed on when the body changed (append-only — a save never destroys
+ *  the previous body), timestamps. Returns the stored piece. */
+export async function savePiece(piece: PieceInput): Promise<Piece> {
+  if (!isTauri()) return devSavePiece(piece);
+  return call<Piece>('save_piece', { piece });
+}
+
+export async function deletePiece(id: string): Promise<void> {
+  if (!isTauri()) {
+    const i = devPieces.findIndex((p) => p.id === id);
+    if (i >= 0) devPieces.splice(i, 1);
+    return;
+  }
+  await call<null>('delete_piece', { id });
+}
+
+/** Rank pieces against `query`. Pool: global pieces + pieces scoped to
+ *  `project` (null = global only). Which engine ran (lexical / semantic /
+ *  hybrid) is the backend's business — callers only see the hit list. */
+export async function matchPieces(
+  query: string,
+  project: string | null,
+  limit: number
+): Promise<MatchHit[]> {
+  if (!isTauri()) return devMatchPieces(query, project, limit);
+  return call<MatchHit[]>('match_pieces', { query, project, limit });
+}
+
+/** Piece JSON files that failed to parse on the last load pass — surfaced so
+ *  a hand-edit typo never reads as a silently vanished piece. */
+export async function pieceLoadErrors(): Promise<PieceLoadError[]> {
+  if (!isTauri()) return devPieceLoadErrors.map((e) => ({ ...e }));
+  return call<PieceLoadError[]>('piece_load_errors');
+}
+
+export async function embedStatus(): Promise<EmbedStatus> {
+  if (!isTauri()) return { ...devEmbed };
+  return call<EmbedStatus>('embed_status');
+}
+
+/** Download the embedding model, streaming progress over a Channel (same
+ *  pattern as `search`). Resolves when the download completes. */
+export async function embedDownload(onProgress: (p: EmbedProgress) => void): Promise<void> {
+  if (!isTauri()) return devEmbedDownload(onProgress);
+  const { invoke, Channel } = await import('@tauri-apps/api/core');
+  const channel = new Channel<EmbedProgress>();
+  channel.onmessage = onProgress;
+  await invoke<null>('embed_download', { onProgress: channel });
+}
+
+/** Persisted app-config toggle; "ready" + enabled = hybrid matching on. */
+export async function setEmbedEnabled(enabled: boolean): Promise<void> {
+  if (!isTauri()) {
+    if (devEmbed.state === 'ready' && !enabled) devEmbed.state = 'off';
+    else if (devEmbed.state === 'off' && enabled) devEmbed.state = 'ready';
+    return;
+  }
+  await call<null>('set_embed_enabled', { enabled });
+}
+
+// --- Browser-dev piece store: real save/versioning semantics over seeded ----
+// sample pieces, so `pnpm dev` exercises the whole Prompts view (including
+// version history and the placeholder flow) with no native shell.
+
+// One seeded broken-file case so the load-errors notice is exercisable in
+// browser dev (dismiss it to see the common path).
+const devPieceLoadErrors: PieceLoadError[] = [
+  {
+    file: '~/.ccdeck/prompts/broken-example.json',
+    error: 'expected `,` or `}` at line 3 column 14',
+  },
+];
+
+const devPieces: Piece[] = [
+  {
+    id: 'dev-piece-reviewer',
+    title: 'senior-reviewer',
+    body: 'You are a senior reviewer. Be rigorous about correctness, but do not nitpick style that a formatter owns.',
+    keywords: ['review', 'role'],
+    tags: [],
+    category: null,
+    scope: { kind: 'global' },
+    placeholders: [],
+    created_at: 1751000000,
+    updated_at: 1751000000,
+    versions: [],
+  },
+  {
+    id: 'dev-piece-terse',
+    title: 'be-terse',
+    body: 'Be terse and concrete. Lead with the answer; skip preamble and hedging.',
+    keywords: ['style', 'tone'],
+    tags: [],
+    category: null,
+    scope: { kind: 'global' },
+    placeholders: [],
+    created_at: 1751000000,
+    updated_at: 1751100000,
+    versions: [{ body: 'Be terse.', saved_at: 1751000000 }],
+  },
+  {
+    id: 'dev-piece-checklist',
+    title: 'pr-review-checklist',
+    body: 'Review the PR for {{ticket}}. Focus especially on {{concern}}. Check error handling, tests, and naming.',
+    keywords: ['review', 'checklist', 'pr'],
+    tags: [],
+    category: null,
+    scope: { kind: 'global' },
+    placeholders: [{ name: 'ticket' }, { name: 'concern' }],
+    created_at: 1751000000,
+    updated_at: 1751000000,
+    versions: [],
+  },
+  {
+    id: 'dev-piece-project',
+    title: 'demo-project-context',
+    body: 'This project is a Tauri + Svelte desktop app. Prefer the existing store idioms over new abstractions.',
+    keywords: ['context'],
+    tags: [],
+    category: null,
+    scope: { kind: 'project', project: '/dev/mock/demo-project' },
+    placeholders: [],
+    created_at: 1751000000,
+    updated_at: 1751000000,
+    versions: [],
+  },
+];
+
+async function devSavePiece(input: PieceInput): Promise<Piece> {
+  const { parsePlaceholders } = await import('./compose/placeholders');
+  const now = Math.floor(Date.now() / 1000);
+  const placeholders = parsePlaceholders(input.body).map((name) => ({ name }));
+  const existing = input.id ? devPieces.find((p) => p.id === input.id) : undefined;
+  if (existing) {
+    if (existing.body !== input.body) {
+      existing.versions.unshift({ body: existing.body, saved_at: existing.updated_at });
+    }
+    existing.title = input.title;
+    existing.body = input.body;
+    existing.keywords = [...input.keywords];
+    existing.tags = [...input.tags];
+    existing.category = input.category;
+    existing.scope = { ...input.scope };
+    existing.placeholders = placeholders;
+    existing.updated_at = now;
+    return structuredClone(existing);
+  }
+  const piece: Piece = {
+    id: crypto.randomUUID(),
+    title: input.title,
+    body: input.body,
+    keywords: [...input.keywords],
+    tags: [...input.tags],
+    category: input.category,
+    scope: { ...input.scope },
+    placeholders,
+    created_at: now,
+    updated_at: now,
+    versions: [],
+  };
+  devPieces.push(piece);
+  return structuredClone(piece);
+}
+
+// A stand-in weighted fuzzy scorer for browser-dev — deliberately a fixture,
+// not shared production logic: the real engine (fzf-style subsequence with
+// field weights, optional hybrid fusion) lives in Rust. This one only needs
+// to make the match panel behave believably in `pnpm dev`.
+function devFuzzyScore(query: string, target: string): number {
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  if (!q) return 0;
+  if (t.includes(q)) return 100 + q.length * 2 - Math.min(20, t.length / 10);
+  // Subsequence match: every query char in order, closer together = better.
+  let ti = 0;
+  let matched = 0;
+  let gaps = 0;
+  let last = -1;
+  for (const ch of q) {
+    if (ch === ' ') continue;
+    const found = t.indexOf(ch, ti);
+    if (found < 0) continue;
+    matched++;
+    if (last >= 0) gaps += found - last - 1;
+    last = found;
+    ti = found + 1;
+  }
+  const qLen = q.replace(/ /g, '').length;
+  if (qLen === 0 || matched < qLen * 0.8) return 0;
+  return Math.max(0, matched * 8 - gaps);
+}
+
+function devMatchPieces(query: string, project: string | null, limit: number): MatchHit[] {
+  if (!query.trim()) return [];
+  const pool = devPieces.filter(
+    (p) => p.scope.kind === 'global' || (project !== null && p.scope.project === project)
+  );
+  const hits: MatchHit[] = [];
+  for (const p of pool) {
+    const score = Math.max(
+      devFuzzyScore(query, p.title) * 3,
+      Math.max(0, ...p.keywords.concat(p.tags).map((k) => devFuzzyScore(query, k))) * 2,
+      devFuzzyScore(query, p.body)
+    );
+    if (score > 0) hits.push({ id: p.id, score, source: 'lexical' });
+  }
+  hits.sort((a, b) => b.score - a.score);
+  return hits.slice(0, limit);
+}
+
+// Fake embed engine: not_downloaded → (Download) → downloading with staged
+// progress → ready. Lets the whole embeddings UI be exercised offline.
+let devEmbed: EmbedStatus = {
+  state: 'not_downloaded',
+  model_id: 'bge-small-en-v1.5',
+  model_size_mb: 85,
+};
+
+async function devEmbedDownload(onProgress: (p: EmbedProgress) => void): Promise<void> {
+  devEmbed.state = 'downloading';
+  // Two stages with per-stage totals — the pinned Channel contract: the ONNX
+  // runtime dylib first, then the model itself. Completion is signaled by
+  // this promise resolving (callers re-fetch embed_status), never by a
+  // channel event.
+  const stages: { stage: EmbedProgress['stage']; totalMb: number }[] = [
+    { stage: 'runtime', totalMb: 30 },
+    { stage: 'model', totalMb: devEmbed.model_size_mb },
+  ];
+  for (const { stage, totalMb } of stages) {
+    const total = totalMb * 1024 * 1024;
+    for (let step = 1; step <= 6; step++) {
+      await new Promise((r) => setTimeout(r, 150));
+      onProgress({ stage, downloaded_bytes: Math.round((total * step) / 6), total_bytes: total });
+    }
+  }
+  devEmbed.state = 'ready';
 }
 
 // --- Browser-dev fallback: a minimal in-JS scan over the mock session. -------
