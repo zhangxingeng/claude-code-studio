@@ -15,8 +15,8 @@
 # Do NOT commit secrets here.
 
 # ── LLM providers ──────────────────────────────────────────────
-build_provider: "sonnet" # The default LLM provider for dispatched build sessions
-audited_providers: ["sonnet"] # Providers approved for repo-mutating dispatch (security boundary)
+build_provider: "opus" # The default LLM provider for dispatched build sessions — user directive 2026-07-09: opus builds (smart agents, delegate-not-dictate); sonnet for read-intensive low-judgment work
+audited_providers: ["sonnet", "opus"] # Providers approved for repo-mutating dispatch (security boundary)
 cold_audit_provider: "sonnet" # Provider used for cold-audit / adversarial-review passes
 
 # ── Git / workspace ────────────────────────────────────────────
