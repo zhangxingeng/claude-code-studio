@@ -1,24 +1,24 @@
 <script lang="ts">
   /**
-   * Prompts — the Prompt Library view (issue #24, Round-B UX pass). Scope tabs
-   * on top (Global + pinned projects — the active tab drives match pool, save
-   * scope, and tint) with the app-level config gear at their right end; the
-   * compose box is the primary surface with situational affordances; the
-   * library/match panel sits left and collapses for a distraction-free box.
-   * Orchestrates the snippet modal, Save as…, the view-scoped hotkeys, the
-   * ↓-into-panel keyboard bridge, and the toast stack.
+   * Prompts — the Prompt Library view. Project tabs on top (a project is a name
+   * and a folder); the compose box is the primary surface; the library panel
+   * sits left, lists the active project's snippets, and collapses for a
+   * distraction-free box. Orchestrates the snippet modal, Save as…, the two
+   * fixed hotkeys, the ↓-into-panel keyboard bridge, and the toast stack.
+   *
+   * There is no scope and no tint: a snippet lives in the folder it sits in, so
+   * "which project does this save to?" has exactly one answer — the active one.
    */
   import { onDestroy, onMount } from 'svelte';
-  import type { Snippet, SnippetScope } from '$lib/prompts/types';
+  import type { Snippet } from '$lib/prompts/types';
   import {
     prompts,
     initPrompts,
     disposePrompts,
-    activeProject,
     composeInsertSnippet,
     copyOutput,
+    touchSnippet,
   } from '$lib/prompts.svelte';
-  import { projectColorVar } from '$lib/prompts/palette';
   import { copyToClipboard } from '$lib/copy';
   import { toasts } from '$lib/prompts/toasts.svelte';
   import ComposeBox from './prompts/ComposeBox.svelte';
@@ -39,19 +39,6 @@
    *  disarm so a modal keystroke never triggers a command. */
   const keyboardCaptured = $derived(modalContext !== null || managerOpen);
 
-  /** The active tab's hue enters the CSS world here, once — everything below
-   *  styles with color-mix over --project-color (unset on Global). */
-  const tintStyle = $derived.by(() => {
-    const active = activeProject();
-    return active ? `--project-color: ${projectColorVar(active.color)}` : '';
-  });
-
-  /** The active tab as a save scope — the default target for a hotkey Save as… */
-  function activeScope(): SnippetScope {
-    const active = activeProject();
-    return active ? { kind: 'project', project_id: active.id } : { kind: 'global' };
-  }
-
   onMount(() => {
     initPrompts();
     window.addEventListener('keydown', onWindowKeydown);
@@ -62,8 +49,12 @@
   });
 
   // ── insert flow: one path, the raw body replaces the query line ──────────────
-  function handleInsert(snippet: Snippet): void {
+  async function handleInsert(snippet: Snippet): Promise<void> {
     composeInsertSnippet(snippet);
+    // Using a snippet is the ONLY thing that feeds the at-rest sort, so the
+    // insert path is where it has to be recorded — this is what makes the panel
+    // open on what you actually reach for.
+    await touchSnippet(snippet.name);
   }
 
   // ── snippet modal ────────────────────────────────────────────────────────────
@@ -73,19 +64,22 @@
 
   /** Save as… — selection-aware (contract §S5/S6). With a selection, save it
    *  (it becomes a linked span). With none, save the whole box as a fresh
-   *  snippet WITHOUT linking the draft (no range) — "save what I wrote". Either
-   *  way the modal opens pre-scoped to `scope`. */
-  function saveAs(scope: SnippetScope): void {
+   *  snippet WITHOUT linking the draft (no range) — "save what I wrote". It
+   *  saves into the active project; there is no scope to choose. */
+  function saveAs(): void {
+    if (prompts.activeProjectPath === null) {
+      toasts.push('Add a prompt folder first — ⋯ above the compose box.');
+      return;
+    }
     if (hasSelection) {
       modalContext = {
         kind: 'new',
         selStart: prompts.selStart,
         selEnd: prompts.selEnd,
         selectionText: prompts.doc.text.slice(prompts.selStart, prompts.selEnd),
-        scope,
       };
     } else if (prompts.doc.text.length > 0) {
-      modalContext = { kind: 'new', selectionText: prompts.doc.text, scope };
+      modalContext = { kind: 'new', selectionText: prompts.doc.text };
     }
   }
 
@@ -140,12 +134,12 @@
     if (key === 's') {
       // saveAs — the browser owns Ctrl/Cmd+S, so we take it.
       e.preventDefault();
-      saveAs(activeScope());
+      saveAs();
     }
   }
 </script>
 
-<div class="prompts-view" style={tintStyle}>
+<div class="prompts-view">
   <div class="prompts-view__tabs">
     <div class="prompts-view__tabrow">
       <div class="prompts-view__tabrow-tabs">

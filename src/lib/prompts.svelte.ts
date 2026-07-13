@@ -8,15 +8,17 @@
  * components) so a draft prompt survives switching views — leaving Prompts
  * to check a session and coming back must not eat your composition.
  */
-import type { Snippet, MatchHit, SnippetInput, Project, ProjectInput } from './prompts/types';
+import type { Snippet, Project } from './prompts/types';
 import {
   listSnippets,
   saveSnippet as apiSaveSnippet,
   deleteSnippet as apiDeleteSnippet,
   listProjects,
-  saveProject as apiSaveProject,
-  deleteProject as apiDeleteProject,
+  addProject as apiAddProject,
+  removeProject as apiRemoveProject,
+  setActiveProject as apiSetActiveProject,
   matchSnippets,
+  touchSnippet as apiTouchSnippet,
 } from './api';
 import {
   type Doc,
@@ -34,22 +36,32 @@ import { copyText } from './compose/variables';
 
 /** Light debounce so we don't hit the matcher on every literal keystroke. */
 const DEBOUNCE_MS = 110;
-/** Match panel size — small on purpose; it's a suggestion strip, not a browser. */
-const MATCH_LIMIT = 8;
+/** Safety cap on one match run, not a UX feature.
+ *
+ *  The panel is the LIBRARY now, not a suggestion strip: at rest it lists every
+ *  snippet in the active project, and typing filters that list *down*. So the
+ *  cap has to be far above any real library — a cap that actually bites would
+ *  make the panel quietly lie about what it contains ("this is everything")
+ *  while hiding snippets. If a library ever exceeds it, the panel says so
+ *  rather than truncating in silence. */
+export const MATCH_LIMIT = 500;
 
 export interface ResolvedHit {
   snippet: Snippet;
   score: number;
-  source: MatchHit['source'];
 }
 
 export const prompts = $state({
-  // library
+  // library — the snippets of the ACTIVE project (every *.md under its folder)
   snippets: [] as Snippet[],
   loadError: null as string | null,
-  // project roster + active tab (null = the Global tab)
+  /** The project roster. A project is a name and a folder — nothing else. */
   projects: [] as Project[],
-  activeProjectId: null as string | null,
+  /** Absolute path of the active project, persisted by the backend and restored
+   *  on launch. `null` does NOT mean "global" — there is no global scope now, a
+   *  snippet lives in the folder it sits in. It means **no project is
+   *  configured yet**, which renders as the empty state that asks for a folder. */
+  activeProjectPath: null as string | null,
   // compose surface
   doc: emptyDoc() as Doc,
   caret: 0,
@@ -78,28 +90,21 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
-/** Load snippets and the project roster. Idempotent per session — re-entering
- *  the view refreshes the library but keeps the compose doc and fills. */
+/** Load the project roster + the active project's snippets, then run the first
+ *  match so the panel is already populated when the view paints. Idempotent per
+ *  session — re-entering refreshes the library but keeps the compose doc. */
 export async function initPrompts(): Promise<void> {
   try {
-    prompts.snippets = await listSnippets();
+    const { projects, active } = await listProjects();
+    prompts.projects = projects;
+    prompts.activeProjectPath = active;
     prompts.loadError = null;
   } catch (e) {
     prompts.loadError = e instanceof Error ? e.message : String(e);
+    return; // no roster ⇒ no project ⇒ nothing to list or match
   }
-  try {
-    prompts.projects = await listProjects();
-    if (
-      prompts.activeProjectId !== null &&
-      !prompts.projects.some((p) => p.id === prompts.activeProjectId)
-    ) {
-      prompts.activeProjectId = null; // the active project vanished — fall back to Global
-    }
-  } catch (e) {
-    // Tabs degrade to Global-only, but say why rather than rendering a
-    // mysteriously bare tab row.
-    prompts.loadError ??= e instanceof Error ? e.message : String(e);
-  }
+  await refreshSnippets();
+  await runMatch(); // at rest this is the whole library, recency-first
 }
 
 /** Stop timers when leaving the view (the doc itself is kept — see header). */
@@ -109,43 +114,101 @@ export function disposePrompts(): void {
   matchId++; // ignore any in-flight match
 }
 
-// ── projects / tabs ──────────────────────────────────────────────────────────
+// ── projects ─────────────────────────────────────────────────────────────────
 
-/** Switch the active tab (null = Global). Drives the match pool, the save
- *  scope for new snippets, and the view tint. */
-export function setActiveProject(id: string | null): void {
-  prompts.activeProjectId = id;
-  scheduleMatch();
-}
-
-/** The active tab's project record (null on the Global tab). Reactive when
- *  read inside a $derived. */
+/** The active project's record, or null when none is configured yet. Reactive
+ *  when read inside a $derived. */
 export function activeProject(): Project | null {
-  return prompts.projects.find((p) => p.id === prompts.activeProjectId) ?? null;
+  return prompts.projects.find((p) => p.path === prompts.activeProjectPath) ?? null;
 }
 
-/** Create or update a project and sync the roster. Returns the stored record. */
-export async function saveProject(input: ProjectInput): Promise<Project> {
-  const saved = await apiSaveProject(input);
-  const i = prompts.projects.findIndex((p) => p.id === saved.id);
+/** Switch projects: persist the choice (the backend restores it on launch),
+ *  then reload the library and the panel — a project IS its folder, so its
+ *  snippets are a different set of files entirely. */
+export async function setActiveProject(path: string): Promise<void> {
+  prompts.activeProjectPath = path;
+  try {
+    await apiSetActiveProject(path);
+  } catch (e) {
+    // The in-session switch already happened and is what the user sees; only
+    // restore-on-next-launch is at risk. Say so rather than silently reverting
+    // the tab they just clicked.
+    prompts.loadError = `Couldn't remember the active project: ${errText(e)}`;
+  }
+  await refreshSnippets();
+  await runMatch();
+}
+
+/** Register a folder as a project and switch to it — you added it to work in it. */
+export async function addProject(name: string, path: string): Promise<Project> {
+  const saved = await upsertProject(name, path);
+  await setActiveProject(saved.path);
+  return saved;
+}
+
+/** Rename a project. The PATH is the identity, so a rename is just re-registering
+ *  the same folder under a new name — and unlike `addProject` it must not steal
+ *  the active tab, since renaming a folder you are not working in is not a
+ *  request to switch to it. */
+export async function renameProject(name: string, path: string): Promise<Project> {
+  return upsertProject(name, path);
+}
+
+async function upsertProject(name: string, path: string): Promise<Project> {
+  const saved = await apiAddProject(name, path);
+  const i = prompts.projects.findIndex((p) => p.path === saved.path);
   if (i >= 0) prompts.projects[i] = saved;
   else prompts.projects.push(saved);
   return saved;
 }
 
-/** Delete a project. Its snippets rescope to GLOBAL (contract semantics — the
- *  writing never vanishes), so the snippet list is re-fetched; an active tab
- *  pointing at it falls back to Global. */
-export async function deleteProject(id: string): Promise<void> {
-  await apiDeleteProject(id);
-  prompts.projects = prompts.projects.filter((p) => p.id !== id);
-  if (prompts.activeProjectId === id) prompts.activeProjectId = null;
+/** Forget a project. **Never deletes files** — the user's prompts are their own;
+ *  this drops the path from the roster and nothing else. If it was active, fall
+ *  back to the first remaining project, or to the no-project empty state. */
+export async function removeProject(path: string): Promise<void> {
+  await apiRemoveProject(path);
+  prompts.projects = prompts.projects.filter((p) => p.path !== path);
+  if (prompts.activeProjectPath !== path) return;
+  const next = prompts.projects[0]?.path ?? null;
+  if (next === null) {
+    prompts.activeProjectPath = null;
+    prompts.snippets = [];
+    prompts.hits = [];
+    return;
+  }
+  await setActiveProject(next);
+}
+
+// ── library ──────────────────────────────────────────────────────────────────
+
+/** Re-read every `*.md` under the active project's folder. */
+export async function refreshSnippets(): Promise<void> {
+  const project = prompts.activeProjectPath;
+  if (project === null) {
+    prompts.snippets = [];
+    return;
+  }
   try {
-    prompts.snippets = await listSnippets();
+    prompts.snippets = await listSnippets(project);
+    prompts.loadError = null;
   } catch (e) {
     prompts.loadError = e instanceof Error ? e.message : String(e);
   }
-  scheduleMatch();
+}
+
+/** Record that a snippet was used. This is the ONLY input to the at-rest sort,
+ *  and it is app-local (never a sidecar in the project folder) — a `last_used`
+ *  write into a git-tracked prompt file would dirty the tree on every insert. */
+export async function touchSnippet(name: string): Promise<void> {
+  const project = prompts.activeProjectPath;
+  if (project === null) return;
+  try {
+    await apiTouchSnippet(project, name);
+  } catch {
+    // Usage tracking only orders the at-rest list. Losing one touch costs a
+    // slightly stale sort, never a lost snippet — not worth interrupting an
+    // insert the user already got.
+  }
 }
 
 // ── live matching ────────────────────────────────────────────────────────────
@@ -155,26 +218,38 @@ function scheduleMatch(): void {
   debounceTimer = setTimeout(runMatch, DEBOUNCE_MS);
 }
 
+/** The list FILTERS DOWN, it does not build up.
+ *
+ *  An empty query is not "no results" — it is "no filter", and the answer to it
+ *  is the whole library, most-recently-used first (the backend owns that sort;
+ *  it holds the usage map). Typing narrows that list by match score. The old
+ *  behavior bailed out on an empty query in BOTH layers, so the user was shown
+ *  an empty panel and had to type to make anything appear at all — backwards,
+ *  and the single thing the founder hit every day.
+ *
+ *  No "recent or relevant?" toggle exists because the question answers itself:
+ *  with no query there is no score to sort by, so recency is the only meaningful
+ *  order; with a query, the score is. */
 async function runMatch(): Promise<void> {
   if (debounceTimer) {
     clearTimeout(debounceTimer);
     debounceTimer = null;
   }
   const id = ++matchId;
-  const query = prompts.matchQuery;
-  if (!query.trim()) {
+  const project = prompts.activeProjectPath;
+  if (project === null) {
     prompts.hits = [];
     prompts.matching = false;
     return;
   }
   prompts.matching = true;
   try {
-    const hits = await matchSnippets(query, prompts.activeProjectId, MATCH_LIMIT);
+    const hits = await matchSnippets(project, prompts.matchQuery, MATCH_LIMIT);
     if (id !== matchId) return; // superseded
-    const byId = new Map(prompts.snippets.map((p) => [p.id, p]));
+    const byName = new Map(prompts.snippets.map((s) => [s.name, s]));
     prompts.hits = hits.flatMap((h) => {
-      const snippet = byId.get(h.id);
-      return snippet ? [{ snippet, score: h.score, source: h.source }] : [];
+      const snippet = byName.get(h.name);
+      return snippet ? [{ snippet, score: h.score }] : [];
     });
     prompts.matching = false;
   } catch (e) {
@@ -182,9 +257,9 @@ async function runMatch(): Promise<void> {
     prompts.matching = false;
     prompts.hits = [];
     // The one failure we expect here is a transient backend/IPC error — Tauri's
-    // Result<_, String> rejects with a *string*. The match panel is a
-    // suggestion strip, not a save path, so that degrades quietly to "no
-    // suggestions" (store errors surface on the save path, which is guarded).
+    // Result<_, String> rejects with a *string*. Matching is a read path, not a
+    // save path, so that degrades quietly (store errors surface on save, which
+    // is guarded).
     if (typeof e === 'string') return;
     // Anything else is a programming error wearing a "No matching snippets."
     // costume — a user reads that as "nothing matched," not "matching is
@@ -192,6 +267,10 @@ async function runMatch(): Promise<void> {
     console.error('Prompt match failed unexpectedly:', e);
     throw e;
   }
+}
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 // ── compose surface ──────────────────────────────────────────────────────────
