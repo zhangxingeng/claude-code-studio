@@ -19,6 +19,7 @@
     copyOutput,
     touchSnippet,
   } from '$lib/prompts.svelte';
+  import { chipAt } from '$lib/compose/doc';
   import { copyToClipboard } from '$lib/copy';
   import { toasts } from '$lib/prompts/toasts.svelte';
   import ComposeBox from './prompts/ComposeBox.svelte';
@@ -33,8 +34,10 @@
   /** MatchPanel instance — only its exported focusFirst() is called (the ↓ step
    *  into the panel). A structural type avoids the component-instance gymnastics. */
   let matchPanel = $state<{ focusFirst: () => boolean } | undefined>(undefined);
+  /** ComposeBox instance. The box owns the selection, so the view reaches in for
+   *  the two things that need it: the Mod+S save and the Esc-back-to-box focus. */
+  let composeBox = $state<{ saveAs: () => void; focus: () => void } | undefined>(undefined);
 
-  const hasSelection = $derived(prompts.selEnd > prompts.selStart);
   /** True while a modal or popover owns the keyboard — the view-scoped hotkeys
    *  disarm so a modal keystroke never triggers a command. */
   const keyboardCaptured = $derived(modalContext !== null || managerOpen);
@@ -48,39 +51,37 @@
     window.removeEventListener('keydown', onWindowKeydown);
   });
 
-  // ── insert flow: one path, the raw body replaces the query line ──────────────
+  // ── insert flow: one path, the chip replaces the query line ──────────────────
   async function handleInsert(snippet: Snippet): Promise<void> {
-    composeInsertSnippet(snippet);
+    composeInsertSnippet(snippet.name, snippet.content);
     // Using a snippet is the ONLY thing that feeds the at-rest sort, so the
     // insert path is where it has to be recorded — this is what makes the panel
     // open on what you actually reach for.
     await touchSnippet(snippet.name);
   }
 
-  // ── snippet modal ────────────────────────────────────────────────────────────
-  function openSpan(spanIndex: number): void {
-    modalContext = { kind: 'span', spanIndex };
+  // ── the popup: two entrances, one surface ────────────────────────────────────
+  // Clicking a chip, or saving typed text. Those are the only two ways a snippet
+  // body is ever edited — which is the whole point of the redesign.
+
+  /** Clicking a chip. The doc holds the chip's current name and content, so the
+   *  popup opens on what the box actually shows. */
+  function openChip(cid: string): void {
+    const chip = chipAt(prompts.doc, cid);
+    if (chip === undefined) return; // deleted out from under the click
+    modalContext = { cid, name: chip.name, content: chip.content };
   }
 
-  /** Save as… — selection-aware (contract §S5/S6). With a selection, save it
-   *  (it becomes a linked span). With none, save the whole box as a fresh
-   *  snippet WITHOUT linking the draft (no range) — "save what I wrote". It
-   *  saves into the active project; there is no scope to choose. */
-  function saveAs(): void {
+  /** Save typed text as a snippet. ComposeBox resolved selection-vs-whole-box
+   *  before calling — it owns the selection, so it is the only place that can
+   *  answer "what did the user mean to save?" without a second, drifting copy. */
+  function saveAsSnippet(text: string): void {
     if (prompts.activeProjectPath === null) {
       toasts.push('Add a prompt folder first — ⋯ above the compose box.');
       return;
     }
-    if (hasSelection) {
-      modalContext = {
-        kind: 'new',
-        selStart: prompts.selStart,
-        selEnd: prompts.selEnd,
-        selectionText: prompts.doc.text.slice(prompts.selStart, prompts.selEnd),
-      };
-    } else if (prompts.doc.text.length > 0) {
-      modalContext = { kind: 'new', selectionText: prompts.doc.text };
-    }
+    if (text.length === 0) return;
+    modalContext = { content: text };
   }
 
   // ── Copy Prompt ──────────────────────────────────────────────────────────────
@@ -132,9 +133,10 @@
       return;
     }
     if (key === 's') {
-      // saveAs — the browser owns Ctrl/Cmd+S, so we take it.
+      // saveAs — the browser owns Ctrl/Cmd+S, so we take it. Delegated to the
+      // box because the box owns the selection this acts on.
       e.preventDefault();
-      saveAs();
+      composeBox?.saveAs();
     }
   }
 </script>
@@ -179,23 +181,28 @@
             ⟨
           </button>
         </div>
-        <MatchPanel bind:this={matchPanel} onInsert={handleInsert} onEscape={() => prompts.focusNonce++} />
+        <MatchPanel bind:this={matchPanel} onInsert={handleInsert} onEscape={() => composeBox?.focus()} />
       </aside>
     {/if}
 
     <section class="prompts-view__compose">
       <ComposeBox
-        onOpenSpan={openSpan}
+        bind:this={composeBox}
+        onOpenChip={openChip}
         onCopy={copyPrompt}
-        onSaveAs={saveAs}
+        onSaveAsSnippet={saveAsSnippet}
         onStepIntoPanel={() => matchPanel?.focusFirst() ?? false}
       />
     </section>
   </div>
 </div>
 
-{#if modalContext}
-  <SnippetModal context={modalContext} onClose={() => (modalContext = null)} />
+{#if modalContext && prompts.activeProjectPath !== null}
+  <SnippetModal
+    context={modalContext}
+    project={prompts.activeProjectPath}
+    onClose={() => (modalContext = null)}
+  />
 {/if}
 
 {#if toasts.items.length}

@@ -108,6 +108,19 @@
     onSaveAsSnippet(selectionText() || flatten(prompts.doc));
   }
 
+  /** The Mod+S hotkey is owned by the view, but the selection it acts on lives
+   *  here. Exporting the one implementation is what keeps the hotkey and the
+   *  button selection-aware *together* — a second copy on the view could only
+   *  drift, and a drift there silently saves more than the user meant. */
+  export function saveAs(): void {
+    handleSaveAs();
+  }
+
+  /** Esc out of the match panel puts the caret back in the box. */
+  export function focus(): void {
+    boxEl?.focus();
+  }
+
   // ── render: model → DOM (external changes only) ─────────────────────────────
 
   /** One chip element. Built programmatically because Svelte must not own the

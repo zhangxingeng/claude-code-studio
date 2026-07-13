@@ -560,7 +560,7 @@ const devStore: Record<string, Snippet[]> = {
     {
       name: 'rust/new-tauri-command',
       content:
-        'Add a Rust command `{command_name}` and its TypeScript mirror. Both sides of the seam change together, or the type checker will not catch the drift:\n\n```rust\n#[tauri::command]\npub async fn {command_name}(project: String) -> Result<(), String> {\n    todo!()\n}\n```\n\nThe braces in that code block are literal — the grammar does not read variables inside a fence.',
+        'Add a Rust command `{command_name}` and its TypeScript mirror. Both sides of the seam change together, or the type checker will not catch the drift:\n\n```rust\n#[tauri::command]\npub async fn {command_name}(project: String) -> Result<(), String> {\n    todo!()\n}\n```\n\nA body is a Python-style format string, uniformly: `{command_name}` is substituted everywhere, code fences included — which is exactly what you want here. To emit a literal brace, double it: `{{` and `}}`.',
     },
     {
       name: 'architecture',
