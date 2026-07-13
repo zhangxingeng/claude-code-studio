@@ -153,22 +153,37 @@ single global cell; showing one cell in two places is convenience, not ambiguity
 It stays as shipped: per-variable, session-only, never persisted, default ON, controlling whether the
 value is substituted in place or emitted once as an XML block at the top of the copy output.
 
-### ⚠ Known hazard: brace collision inside code
+### The grammar is a Python format string. Nothing more.
 
-A prompt body containing a code sample — `if (x) { return foo }`, a Rust `format!("{name}")`, a JS
-object literal — will have its braces parsed as variables. **This hazard exists today** and is not
-introduced by this round, but it gets more likely in Markdown, where fenced code blocks are the
-norm in a dev-prompt library.
+**Founder ruling, overriding an earlier markdown-aware design:** *"strictly follow python rstring
+pattern. if python can parse we can if not we cant. less friction we dont invent protocols."*
 
-**Decision (flag if wrong): variables are not parsed inside fenced code blocks (```` ``` ````) or
-inline code spans (`` ` ``).** This is natural in Markdown, needs no configuration, and eliminates
-the entire false-positive class. The cost is that a variable *inside* a code example becomes
-impossible — judged rare enough to accept, and `{{`/`}}` remains available as the manual escape
-everywhere else.
+So the grammar is **uniform over the whole body**. There is no code-fence carve-out and no
+inline-backtick carve-out. `{name}` parses everywhere; `{{` / `}}` are the escapes everywhere.
 
-**A code fence is fully verbatim — escapes included.** `{{` does **not** unescape inside a fence.
-Otherwise a Rust `format!("{{}}")` in a code sample is silently rewritten on copy, which presents to
-the user as "the app mangled my prompt" with no way to guess why. Verbatim means verbatim.
+The earlier design excluded fenced blocks and inline code spans to stop a code sample's braces
+false-positiving as variables. It was wrong, and the reason it was wrong is the reason this whole
+round exists: *"variables work everywhere, except inside backticks, and except inside fences"* is a
+rule you have to be **told**. It cannot be guessed. *"It's a Python format string"* is a rule the
+user — and every LLM consuming the output — already knows. **Less to remember beats
+more-correct-in-a-corner.**
+
+It also failed on contact: the first realistic dev-prompt fixture anyone wrote put its placeholder in
+backticks (`` `{command_name}` ``), which the carve-out silently turned into literal text.
+
+The name rule *is* the Python rule, not an exception to it: if Python can parse it as a plain field,
+it's a variable; if not, it stays literal. `{a: 1}`, `{ return x }`, `{a.b}`, `{my var}` all fall
+through to prose on their own.
+
+**The accepted cost, stated plainly.** A fenced code sample containing `{name}` *does* become a
+variable. This is **loud, not silent** — the chip renders the variable names it contains and the fill
+list shows them, so a stray `name` appears in the UI and the author escapes it as `{{name}}`, exactly
+as they would in Python. *The UI surfacing parsed variables is what makes this safe.*
+
+**One case is genuinely silent, and is accepted knowingly:** `{{` inside a code sample (a Rust
+`format!("{{}}")`) unescapes to `format!("{}")` on copy — because under Python semantics that is
+*correct*. A literal `{{` is written `{{{{`. This must stay documented in `variables.ts` so the next
+reader does not "fix" it back into a carve-out.
 
 ---
 
