@@ -17,22 +17,18 @@
     activeProject,
     composeInsertSnippet,
     copyOutput,
-    resolvedHotkeys,
   } from '$lib/prompts.svelte';
   import { projectColorVar } from '$lib/prompts/palette';
   import { copyToClipboard } from '$lib/copy';
   import { toasts } from '$lib/prompts/toasts.svelte';
-  import { HOTKEY_COMMANDS, eventMatchesChord } from '$lib/prompts/hotkeys';
   import ComposeBox from './prompts/ComposeBox.svelte';
   import MatchPanel from './prompts/MatchPanel.svelte';
   import SnippetModal, { type SnippetModalContext } from './prompts/SnippetModal.svelte';
   import ProjectTabs from './prompts/ProjectTabs.svelte';
   import ProjectManagerPopover from './prompts/ProjectManagerPopover.svelte';
-  import ConfigPopover from './prompts/ConfigPopover.svelte';
 
   let panelCollapsed = $state(false);
   let managerOpen = $state(false);
-  let configOpen = $state(false);
   let modalContext = $state<SnippetModalContext | null>(null);
   /** MatchPanel instance — only its exported focusFirst() is called (the ↓ step
    *  into the panel). A structural type avoids the component-instance gymnastics. */
@@ -40,8 +36,8 @@
 
   const hasSelection = $derived(prompts.selEnd > prompts.selStart);
   /** True while a modal or popover owns the keyboard — the view-scoped hotkeys
-   *  disarm so a rebind capture or a modal keystroke never triggers a command. */
-  const keyboardCaptured = $derived(modalContext !== null || managerOpen || configOpen);
+   *  disarm so a modal keystroke never triggers a command. */
+  const keyboardCaptured = $derived(modalContext !== null || managerOpen);
 
   /** The active tab's hue enters the CSS world here, once — everything below
    *  styles with color-mix over --project-color (unset on Global). */
@@ -99,16 +95,14 @@
     toasts.push(ok ? 'Prompt copied.' : 'Copy failed — select the text manually.');
   }
 
-  // ── view-scoped hotkeys (contract §Hotkey map) ───────────────────────────────
-  /** Is a text-entry element focused right now? These hotkeys fire from a window
-   *  listener, so the guard must reason about where focus actually is — not the
-   *  compose box's stored selection, which goes stale the moment focus leaves it
-   *  (e.g. into a variable fill input). */
-  function textEntryFocused(): boolean {
-    const el = document.activeElement;
-    if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) return true;
-    return el instanceof HTMLElement && el.isContentEditable;
-  }
+  // ── view-scoped hotkeys — fixed, not rebindable ──────────────────────────────
+  // Two commands, two constants: Mod+C copies the composed prompt, Mod+S saves
+  // as a snippet ("Mod" = Ctrl on Windows/Linux, Cmd on macOS). Rebinding was cut
+  // (contract §Cuts) — nobody ever rebound them, and the capture/conflict UI cost
+  // ~410 lines to defend a capability with no users. Both chords carry Mod by
+  // construction now, so the old "a hand-edited config bound a bare key, don't
+  // steal a keystroke a text field would insert" backstop has nothing left to
+  // defend against and is gone with it.
 
   /** Does native copy have something to act on, wherever focus is? A text-entry
    *  element's own non-collapsed selection, or a non-collapsed document
@@ -131,27 +125,23 @@
 
   function onWindowKeydown(e: KeyboardEvent): void {
     if (keyboardCaptured) return; // a modal/popover owns the keyboard
-    const keys = resolvedHotkeys();
-    const command = HOTKEY_COMMANDS.find((c) => eventMatchesChord(e, keys[c]));
-    if (!command) return;
-    // Dispatch-time backstop (defense in depth): a chord without Ctrl/Cmd is a
-    // plain keystroke a focused text field would insert — never steal it, even
-    // if a hand-edited config bound a command to a bare key. The capture UI and
-    // resolveHotkeys forbid such a binding, but the dispatcher must not depend
-    // on that being the only line of defense (a bricked compose box is the cost).
-    if (!(e.ctrlKey || e.metaKey) && textEntryFocused()) return;
-    if (command === 'copyPrompt') {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const key = e.key.toLowerCase();
+    if (key === 'c') {
       // Selection-aware (JC-4 / §S9): native copy owns Ctrl/Cmd+C whenever
       // anything is selected where focus actually is; we claim only the empty
-      // key-space the OS leaves us when nothing is selected anywhere.
+      // key-space the OS leaves us when nothing is selected anywhere. Without
+      // this, Copy Prompt would hijack a copy out of a variable fill input.
       if (nativeSelectionActive()) return;
       e.preventDefault();
       void copyPrompt();
       return;
     }
-    // saveAs — the browser owns Ctrl/Cmd+S.
-    e.preventDefault();
-    saveAs(activeScope());
+    if (key === 's') {
+      // saveAs — the browser owns Ctrl/Cmd+S, so we take it.
+      e.preventDefault();
+      saveAs(activeScope());
+    }
   }
 </script>
 
@@ -161,7 +151,6 @@
       <div class="prompts-view__tabrow-tabs">
         <ProjectTabs onOpenManager={() => (managerOpen = !managerOpen)} />
       </div>
-      <ConfigPopover bind:open={configOpen} />
     </div>
     {#if managerOpen}
       <ProjectManagerPopover onClose={() => (managerOpen = false)} />
