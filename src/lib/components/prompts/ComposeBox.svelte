@@ -469,14 +469,14 @@
     padding: 0.8rem 0.9rem 3rem;
     border: 1px solid var(--border);
     border-radius: 0.5rem;
-    background: color-mix(in srgb, var(--project-color, var(--bg-card)) 5%, var(--bg-card));
+    background: var(--bg-card);
     color: var(--text);
     box-sizing: border-box;
     overflow-y: auto;
   }
   .compose__box:focus {
     outline: none;
-    border-color: color-mix(in srgb, var(--project-color, var(--accent-snippet)) 55%, var(--border));
+    border-color: color-mix(in srgb, var(--accent-snippet) 55%, var(--border));
   }
   .compose__box:empty::before {
     content: attr(data-placeholder);
