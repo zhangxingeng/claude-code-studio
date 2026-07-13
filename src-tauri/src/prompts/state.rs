@@ -329,8 +329,7 @@ pub fn spawn_background_index(state: &PromptsState) {
 fn background_index(inner: &PromptsInner) -> Result<(), String> {
     let root = root()?;
     if !embed::artifacts_present(&root) {
-        // No progress channel: nobody is watching, by design.
-        embed::download_artifacts(&root, &|_| {})?;
+        embed::download_artifacts(&root)?;
     }
     let Some(project) = appstate::active_project(&root)? else {
         return Ok(()); // no project registered yet — nothing to index
