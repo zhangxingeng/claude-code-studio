@@ -625,8 +625,8 @@ Closes the Prompt Library epic's **Core build** (#24, epic #7) — save any prom
 **snippet**, group snippets into colored **projects**, and compose without leaving the keyboard:
 type to search, arrow into the match panel, Enter inserts over the query line. Two living
 contracts govern the feature and are meant to be kept current, not restated here:
-[`project_docs/prompts-design.md`](prompts-design.md) (storage, schema, command surface, variable
-grammar, match engine) and [`project_docs/prompts-ux.md`](prompts-ux.md) (every interaction, key
+`project_docs/prompts-design.md` (storage, schema, command surface, variable
+grammar, match engine) and `project_docs/prompts-ux.md` (every interaction, key
 by key).
 
 - **Rename mid-round: "pieces" → "snippets"** (`5b4a989`) — the founder's call, free to make
@@ -698,8 +698,8 @@ measure of success is that the founder can open the app after two weeks away and
 everything works without reading anything.
 
 The two living contracts were rewritten from the round's plan and the merged code, and remain the
-place to look: [`project_docs/prompts-design.md`](prompts-design.md) (storage, command surface,
-grammar, match engine, the compose model) and [`project_docs/prompts-ux.md`](prompts-ux.md) (every
+place to look: `project_docs/prompts-design.md` (storage, command surface,
+grammar, match engine, the compose model) and `project_docs/prompts-ux.md` (every
 interaction, plus a table of what was cut and why it stays cut).
 
 - **A snippet is a Markdown file whose filename is its name.** No uuid, no JSON, no
@@ -847,6 +847,24 @@ O(total-bytes) passes blocked first paint. The product goal: **the user always s
   *mount*: it completes unless the app is closed mid-walk (navigating away does **not** cancel it).
   This is strictly better than the freeze it replaces, but the completeness guarantee is now "per
   session, best-effort" rather than "per launch, synchronous." Accepted deliberately for this round.
+
+## Phase 20 — Prompt Library split into its own product (prompt-compose) (targets v0.14.0)
+
+The Prompt Library — the prompts view, the Markdown snippet store, the project model, the compose
+box, the variable grammar, the semantic-embedding matcher — has left CC Deck entirely for a
+standalone repo, [`prompt-compose`](https://github.com/zhangxingeng/prompt-compose): its own Tauri v2
++ SvelteKit desktop app. Search and prompts now run in parallel products, not one containing the
+other. CC Deck keeps browse, search, view, edit/share (HTML + PDF export), resume-copy, and app
+config — all unaffected.
+
+- **Both living contracts moved with the code.** `project_docs/prompts-design.md` and
+  `project_docs/prompts-ux.md` are gone from this repo; they now live in `prompt-compose`.
+- **Prompt-only Rust deps pruned**: `fastembed`, `ort`, `ureq`, `sha2`, `flate2`, `tar`, `zip`, and
+  the `plugin-dialog` dep — none of them had a use outside the prompts feature.
+- **Orphaned-but-inert on disk.** `~/.ccdeck/prompts-state.json` and any downloaded embedding
+  model / ONNX-runtime cache under `~/.ccdeck` are left behind; nothing reads them now, so they're
+  harmless. Release notes will tell users they can delete them. No migration ships — same precedent
+  as the 0.13 round: the founder hand-migrates his own `prompts-state.json` (population of one).
 
 ## Verification performed (historical — Phase 7 snapshot, 2026-07-05)
 
