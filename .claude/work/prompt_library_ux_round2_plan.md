@@ -247,7 +247,7 @@ investigate → implement+commit → update-issue. **Lead owns integration.**
 | Lane | Owns |
 |---|---|
 | **E — Library panel** | Match highlighting (client-side span derivation, see Clarifications), hover-to-full-text, the `+` create button, deleting the compose box's "Save as snippet" path |
-| **F — Compose box** | Chip hover preview, copy button (top-right icon), the expanded-copy clipboard fix, moving the fill list right, the chip-side half of the dirty/draft indicator |
+| **F — Compose box** | Chip hover preview, copy button (top-right icon), the expanded-copy clipboard fix, moving the fill list right, the chip-side half of the dirty/draft indicator, **and §3** (cut the per-variable as-var toggle — unowned in the original draft, caught by Lane F during investigate; it's entirely inside F's files: `VariableFillList.svelte`, `compose/variables.ts`, and the fills/copy region of `prompts.svelte.ts`) |
 | **G — Projects** | Colors (fixed 6–8 swatch set, incl. the `Project.color` field + state persistence), `+` button, folder picker dialog, right-click context menu |
 | **H — Popup** | The left/right button split (incl. the right group's absence when opened from `+`), the `Use once` → `Save` rename, the popup-side half of the dirty/draft indicator |
 
