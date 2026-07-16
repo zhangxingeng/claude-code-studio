@@ -21,45 +21,38 @@ looking for them.
 
 CC Deck finds every Claude Code session on your machine automatically and renders each one as a
 conversation — not a wall of raw JSON. Markdown renders properly. Thinking steps collapse so they
-don't clutter the page. Tool calls, their results, and nested sub-agent threads are laid out so you
-can actually follow what happened.
+don't clutter the page. Tool calls and their results are laid out so you can actually follow what
+happened.
 
 ![A chat transcript with message metadata, a collapsible tool-call group, and a Bash tool result](project_docs/screenshots/chat-detail.png)
 
-Spot something you want to fix? Edit any message in place. Every change is backed up automatically
-with a word-level diff, full undo/redo, and one-click restore to any earlier version — so editing
-history is never a one-way door.
+Spot something you want to fix — or redact before sharing? Edit or delete any message in place.
+CC Deck silently keeps a backup of the previous state each time you save, with one-click restore,
+so editing history is never a one-way door.
 
 ![Editing an assistant message's raw markdown source in place inside a transcript](project_docs/screenshots/edit-message.png)
 
-Search covers your entire history at once, with filters for message type, date, project, and tool
-name, and keyboard navigation throughout. When you find the conversation you want, resume it right
+Search covers your entire history at once — just your messages and Claude's replies, no tool noise —
+with date and project filters and keyboard navigation throughout. When you find the conversation
+you want, resume it right
 where you left off — or fork a brand-new session from any single message in its history.
 
 Managing prompt snippets moved to its own app, [Prompt Compose](https://github.com/zhangxingeng/prompt-compose)
 — CC Deck now focuses on search and edit/share.
 
-## Settings without the JSON
+## Share a conversation as a file
 
-Claude Code settings can live in up to three separate files — user, project, and local — and it's
-genuinely hard to know what's set where, or which one wins. CC Deck reads all three, shows every
-field in plain language (pulled straight from Claude Code's own published schema, not guesswork), and
-flags conflicts loudly: *"`model` is set in both User and Project — Project wins."*
+Export any session as a single self-contained HTML file — styles inlined, no external requests —
+that opens in any browser, or print it straight to PDF from the same view. Combined with in-place
+editing, that's the whole share flow: redact what's sensitive, export, send.
 
-![Settings search showing Claude Code config keys matching "model", each with an inline description](project_docs/screenshots/settings-search.png)
+## Resume in your own terminal
 
-About 20 of the most common settings are shown by default; the rest — well over a hundred — are one
-click away behind a "show advanced settings" toggle. Edit any tier directly and CC Deck writes
-exactly the file you meant to change, nothing merged behind your back.
-
-## Run it your way
-
-CC Deck doesn't force you into its own built-in console. Launch Claude Code in whatever terminal you
-already use — it auto-detects a sensible default, so it just works out of the box. Want more control?
-Pick a specific terminal, write your own launch command, or point a session at a different provider
-entirely.
-
-![The app config page showing terminal launch mode, a customizable resume command, and provider profiles](project_docs/screenshots/app-config.png)
+CC Deck never launches or controls a terminal for you. To pick a conversation back up, click Resume
+(or right-click a session) and copy the facts you need — the ready-to-paste
+`cd '<project>' && claude --resume '<id>'` command, the project path, or the session id — then run
+it wherever you already work. Forking is the same: fork from any message and CC Deck hands you the
+new session's resume command.
 
 ## Getting started
 
