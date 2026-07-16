@@ -359,6 +359,11 @@ fn ceil_boundary(s: &str, mut i: usize) -> usize {
 const COLD_WINDOW_BEFORE: usize = 60;
 const COLD_WINDOW_AFTER: usize = 180;
 
+/// A cold-tier match: the windowed snippet, the char-offset ranges of every
+/// matched token inside it, and the count of distinct tokens matched (a coarse
+/// relevance proxy — see [`cold_match`]).
+pub type ColdMatch = (String, Vec<(u32, u32)>, usize);
+
 /// Cold-path match: at least one query token appears as a case-insensitive
 /// substring — an OR/partial-credit match (a simpler, non-fuzzy stand-in used
 /// only for session files not yet reflected in the tantivy index — see
@@ -372,15 +377,27 @@ const COLD_WINDOW_AFTER: usize = 180;
 /// tokens matched — a coarse relevance proxy so more-tokens-matched still
 /// ranks higher, mirroring (without a full BM25 recompute) the warm tier's
 /// "more matched tokens accumulate more score" behavior.
-pub fn cold_match(text: &str, tokens: &[String]) -> Option<(String, Vec<(u32, u32)>, usize)> {
+pub fn cold_match(text: &str, tokens: &[String]) -> Option<ColdMatch> {
     if tokens.is_empty() {
         return None;
     }
-    let lower = text.to_lowercase();
+    // Fold to ASCII-lowercase (NOT full Unicode `to_lowercase`) for both the
+    // haystack and the needles. `to_ascii_lowercase` is byte-length-identical
+    // to its source by construction (only A–Z → a–z, both single-byte), so
+    // every byte offset we compute on `lower` is a valid offset into the
+    // original `text` we slice for the snippet. Full `to_lowercase` can change
+    // byte length (e.g. 'İ' U+0130 → "i̇", one code point to two) — that shifts
+    // the offsets below out of alignment with `text` and can slice a non-char
+    // boundary, panicking. Tradeoff: non-ASCII case-insensitive matches degrade
+    // to case-sensitive in this cold tier only; the warm tantivy tier keeps its
+    // own (full) lowercasing, so this affects only not-yet-indexed files, and a
+    // panic here is worse than that lost recall.
+    let lower = text.to_ascii_lowercase();
+    let needles: Vec<String> = tokens.iter().map(|t| t.to_ascii_lowercase()).collect();
     let mut first = usize::MAX;
     let mut matched = 0usize;
-    for tok in tokens {
-        if let Some(pos) = lower.find(tok.as_str()) {
+    for needle in &needles {
+        if let Some(pos) = lower.find(needle.as_str()) {
             matched += 1;
             first = first.min(pos);
         }
@@ -407,11 +424,11 @@ pub fn cold_match(text: &str, tokens: &[String]) -> Option<(String, Vec<(u32, u3
 
     let base_chars = if lead { 1u32 } else { 0 };
     let mut ranges = Vec::new();
-    for tok in tokens {
+    for needle in &needles {
         let mut search_from = win_start;
-        while let Some(rel) = lower[search_from..win_end.max(search_from)].find(tok.as_str()) {
+        while let Some(rel) = lower[search_from..win_end.max(search_from)].find(needle.as_str()) {
             let s = search_from + rel;
-            let e = s + tok.len();
+            let e = s + needle.len();
             if s < win_start || e > win_end {
                 break;
             }
@@ -634,5 +651,36 @@ mod tests {
         assert_eq!(partial_ranges.len(), 1);
 
         assert!(cold_match("nothing relevant here", &tokens).is_none());
+    }
+
+    #[test]
+    fn cold_match_survives_length_changing_unicode_and_keeps_offsets_sane() {
+        // 'İ' (U+0130) is the classic length-changing fold: full `to_lowercase`
+        // maps it to "i̇" (two code points, an extra byte), which is what made
+        // the old `text.to_lowercase()` path compute offsets that misaligned
+        // into — or sliced a non-char boundary of — the original `text`. ASCII
+        // folding leaves the byte length untouched, so offsets stay valid.
+        // Needle avoids the 'İ' itself (ASCII fold can't case-match it — the
+        // documented cold-tier degradation), matching the ASCII tail instead.
+        let tokens = vec!["stanbul".to_string()];
+        let (snippet, ranges, matched) =
+            cold_match("Visiting İstanbul this summer", &tokens).unwrap();
+        assert_eq!(matched, 1);
+        assert_eq!(ranges.len(), 1, "one occurrence, highlighted once");
+
+        // The char range must map back to the real substring in the snippet,
+        // correctly counting the two-byte 'İ' as a single char.
+        let (s, e) = ranges[0];
+        let highlighted: String = snippet
+            .chars()
+            .skip(s as usize)
+            .take((e - s) as usize)
+            .collect();
+        assert_eq!(highlighted, "stanbul");
+
+        // And a needle that only the 'İ' would satisfy under full Unicode
+        // folding no longer matches (case-sensitive in the cold tier) — but it
+        // returns cleanly rather than panicking, which is the point.
+        assert!(cold_match("İstanbul", &["istanbul".to_string()]).is_none());
     }
 }
