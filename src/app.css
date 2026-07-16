@@ -316,3 +316,20 @@ a { color: var(--accent-user); }
   .container-main { padding: 1rem 0.85rem; }
   .app-header { padding: 0.6rem 0.85rem; }
 }
+
+/* Print — Export PDF (issue #36).
+   +page.svelte mounts a read-only SessionView inside `.print-only` while
+   printing; here we hide the live app chrome (header, footer, and the editor in
+   <main>) and reveal that clean render, so the OS "Save as PDF" captures only
+   the conversation. The `.print-only` node is display:none on screen and only
+   ever visible under print media. */
+.print-only { display: none; }
+@media print {
+  .app-header,
+  .app-footer,
+  main.container-main { display: none !important; }
+  .print-only { display: block !important; }
+  /* Let a full-bleed conversation use the whole page rather than the app's
+     narrow reading column. */
+  .print-only .container-main { max-width: none; padding: 0; }
+}
