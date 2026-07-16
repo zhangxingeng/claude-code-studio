@@ -3,8 +3,9 @@
    * Prompts — the Prompt Library view. Project tabs on top (a project is a name
    * and a folder); the compose box is the primary surface; the library panel
    * sits left, lists the active project's snippets, and collapses for a
-   * distraction-free box. Orchestrates the snippet modal, Save as…, the two
-   * fixed hotkeys, the ↓-into-panel keyboard bridge, and the toast stack.
+   * distraction-free box. Orchestrates the snippet modal, the library's `+`
+   * create button, the one fixed hotkey, the ↓-into-panel keyboard bridge, and
+   * the toast stack.
    *
    * There is no scope and no tint: a snippet lives in the folder it sits in, so
    * "which project does this save to?" has exactly one answer — the active one.
@@ -34,9 +35,9 @@
   /** MatchPanel instance — only its exported focusFirst() is called (the ↓ step
    *  into the panel). A structural type avoids the component-instance gymnastics. */
   let matchPanel = $state<{ focusFirst: () => boolean } | undefined>(undefined);
-  /** ComposeBox instance. The box owns the selection, so the view reaches in for
-   *  the two things that need it: the Mod+S save and the Esc-back-to-box focus. */
-  let composeBox = $state<{ saveAs: () => void; focus: () => void } | undefined>(undefined);
+  /** ComposeBox instance. Only its exported `focus()` is called (Esc out of the
+   *  match panel puts the caret back in the box). */
+  let composeBox = $state<{ focus: () => void } | undefined>(undefined);
 
   /** True while a modal or popover owns the keyboard — the view-scoped hotkeys
    *  disarm so a modal keystroke never triggers a command. */
@@ -61,8 +62,11 @@
   }
 
   // ── the popup: two entrances, one surface ────────────────────────────────────
-  // Clicking a chip, or saving typed text. Those are the only two ways a snippet
-  // body is ever edited — which is the whole point of the redesign.
+  // Clicking a chip, or the library's `+` button. Those are the only two ways a
+  // snippet body is ever edited — which is the whole point of the redesign. The
+  // compose box used to offer a third (Save as snippet); that path is cut —
+  // "the compose box is for orchestrating snippets into a prompt. The library
+  // is where snippets are made."
 
   /** Clicking a chip. The doc holds the chip's current name and content, so the
    *  popup opens on what the box actually shows. */
@@ -72,16 +76,15 @@
     modalContext = { cid, name: chip.name, content: chip.content };
   }
 
-  /** Save typed text as a snippet. ComposeBox resolved selection-vs-whole-box
-   *  before calling — it owns the selection, so it is the only place that can
-   *  answer "what did the user mean to save?" without a second, drifting copy. */
-  function saveAsSnippet(text: string): void {
+  /** The library's `+` button: create a new snippet from scratch. Blank context
+   *  (no `cid`, no `name`) hits the modal's existing `!fromChip` create branch —
+   *  this is just a new trigger for it, and now the ONLY in-app one. */
+  function createSnippet(): void {
     if (prompts.activeProjectPath === null) {
-      toasts.push('Add a prompt folder first — ⋯ above the compose box.');
+      toasts.push('Add a prompt folder first');
       return;
     }
-    if (text.length === 0) return;
-    modalContext = { content: text };
+    modalContext = { content: '' };
   }
 
   // ── Copy Prompt ──────────────────────────────────────────────────────────────
@@ -90,14 +93,16 @@
     toasts.push(ok ? 'Prompt copied.' : 'Copy failed — select the text manually.');
   }
 
-  // ── view-scoped hotkeys — fixed, not rebindable ──────────────────────────────
-  // Two commands, two constants: Mod+C copies the composed prompt, Mod+S saves
-  // as a snippet ("Mod" = Ctrl on Windows/Linux, Cmd on macOS). Rebinding was cut
-  // (contract §Cuts) — nobody ever rebound them, and the capture/conflict UI cost
-  // ~410 lines to defend a capability with no users. Both chords carry Mod by
-  // construction now, so the old "a hand-edited config bound a bare key, don't
-  // steal a keystroke a text field would insert" backstop has nothing left to
-  // defend against and is gone with it.
+  // ── view-scoped hotkey — fixed, not rebindable ───────────────────────────────
+  // One command, one constant: Mod+C copies the composed prompt ("Mod" = Ctrl on
+  // Windows/Linux, Cmd on macOS). Mod+S (save as snippet) was cut along with the
+  // compose box's save-as-snippet path — the library's `+` button is now the
+  // only way to create one, and Ctrl/Cmd+S reverts to the browser's own binding.
+  // Rebinding was cut separately (contract §Cuts) — nobody ever rebound this,
+  // and the capture/conflict UI cost ~410 lines to defend a capability with no
+  // users. The chord carries Mod by construction, so the old "a hand-edited
+  // config bound a bare key, don't steal a keystroke a text field would insert"
+  // backstop has nothing left to defend against and is gone with it.
 
   /** Does native copy have something to act on, wherever focus is? A text-entry
    *  element's own non-collapsed selection, or a non-collapsed document
@@ -130,13 +135,6 @@
       if (nativeSelectionActive()) return;
       e.preventDefault();
       void copyPrompt();
-      return;
-    }
-    if (key === 's') {
-      // saveAs — the browser owns Ctrl/Cmd+S, so we take it. Delegated to the
-      // box because the box owns the selection this acts on.
-      e.preventDefault();
-      composeBox?.saveAs();
     }
   }
 </script>
@@ -171,15 +169,26 @@
       <aside class="prompts-view__panel">
         <div class="prompts-view__panel-head">
           <span class="prompts-view__panel-title">Library</span>
-          <button
-            type="button"
-            class="btn btn--ghost btn--sm"
-            onclick={() => (panelCollapsed = true)}
-            title="Hide the library panel (distraction-free box)"
-            aria-label="Hide the library panel"
-          >
-            ⟨
-          </button>
+          <div class="prompts-view__panel-head-actions">
+            <button
+              type="button"
+              class="btn btn--ghost btn--sm"
+              onclick={createSnippet}
+              title="New snippet"
+              aria-label="New snippet"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              class="btn btn--ghost btn--sm"
+              onclick={() => (panelCollapsed = true)}
+              title="Hide the library panel (distraction-free box)"
+              aria-label="Hide the library panel"
+            >
+              ⟨
+            </button>
+          </div>
         </div>
         <MatchPanel bind:this={matchPanel} onInsert={handleInsert} onEscape={() => composeBox?.focus()} />
       </aside>
@@ -190,7 +199,6 @@
         bind:this={composeBox}
         onOpenChip={openChip}
         onCopy={copyPrompt}
-        onSaveAsSnippet={saveAsSnippet}
         onStepIntoPanel={() => matchPanel?.focusFirst() ?? false}
       />
     </section>
@@ -258,6 +266,11 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: 0.4rem;
+  }
+  .prompts-view__panel-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
   }
   .prompts-view__panel-peek {
     align-self: flex-start;

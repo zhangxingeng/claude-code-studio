@@ -28,6 +28,11 @@
   } = $props();
 
   let listEl: HTMLDivElement | undefined = $state(undefined);
+  /** Index of the hit currently hovered/focused — the ONLY one whose full body is
+   *  rendered. Hover-reveal is the rule everywhere in this redesign (chip, row);
+   *  tying it to focus too (not just mouseenter) means the existing ↑/↓ keyboard
+   *  nav gets the same reveal for free, with no separate keyboard path to build. */
+  let expandedIdx = $state<number | null>(null);
 
   function hitButtons(): HTMLButtonElement[] {
     return listEl ? [...listEl.querySelectorAll<HTMLButtonElement>('button.match-hit')] : [];
@@ -76,20 +81,111 @@
    *  library, so on the day that stops being true it must say so out loud — a
    *  silent truncation would make it lie. */
   const truncated = $derived(prompts.hits.length >= MATCH_LIMIT);
+
+  // ── match highlighting (contract §1 + Clarifications) ────────────────────────
+  //
+  // The matcher (lexical fzf-style subsequence + a blended semantic/embedding
+  // engine, src-tauri/src/prompts/{lexical,state}.rs) returns only `{ name,
+  // score }` — no match positions, and no backend change is planned. So the
+  // spans are derived here, client-side, from the query alone:
+  //
+  // For each whitespace-separated query token, search the hit's NAME first,
+  // then its CONTENT (the same order the lexical scorer weighs the two
+  // fields), case-insensitive substring only — and take the first span found.
+  // A token that matches neither contributes no span. A hit that cleared the
+  // bar purely through the semantic engine has no literal token anywhere, so
+  // it ends up with zero spans and renders with NO highlight — never a
+  // fabricated one. This is a known partial fix (stated in the plan): it makes
+  // a lexical hit's ranking legible, not a semantic-only one's.
+
+  interface Span {
+    start: number;
+    end: number;
+  }
+
+  function tokensOf(query: string): string[] {
+    return query.trim().split(/\s+/).filter(Boolean);
+  }
+
+  const queryTokens = $derived(tokensOf(prompts.matchQuery));
+
+  function mergeSpans(spans: Span[]): Span[] {
+    if (spans.length <= 1) return spans;
+    const sorted = [...spans].sort((a, b) => a.start - b.start);
+    const merged: Span[] = [sorted[0]];
+    for (const s of sorted.slice(1)) {
+      const last = merged[merged.length - 1];
+      if (s.start <= last.end) last.end = Math.max(last.end, s.end);
+      else merged.push(s);
+    }
+    return merged;
+  }
+
+  function deriveSpans(
+    name: string,
+    content: string,
+    tokens: string[]
+  ): { nameSpans: Span[]; contentSpans: Span[] } {
+    const nameSpans: Span[] = [];
+    const contentSpans: Span[] = [];
+    const lowerName = name.toLowerCase();
+    const lowerContent = content.toLowerCase();
+    for (const token of tokens) {
+      const t = token.toLowerCase();
+      const ni = lowerName.indexOf(t);
+      if (ni >= 0) {
+        nameSpans.push({ start: ni, end: ni + token.length });
+        continue;
+      }
+      const ci = lowerContent.indexOf(t);
+      if (ci >= 0) contentSpans.push({ start: ci, end: ci + token.length });
+    }
+    return { nameSpans: mergeSpans(nameSpans), contentSpans: mergeSpans(contentSpans) };
+  }
+
+  interface Seg {
+    t: string;
+    hl: boolean;
+  }
+
+  function renderSpans(text: string, spans: Span[]): Seg[] {
+    if (!spans.length) return [{ t: text, hl: false }];
+    const segs: Seg[] = [];
+    let pos = 0;
+    for (const { start, end } of spans) {
+      if (start > pos) segs.push({ t: text.slice(pos, start), hl: false });
+      segs.push({ t: text.slice(start, end), hl: true });
+      pos = end;
+    }
+    if (pos < text.length) segs.push({ t: text.slice(pos), hl: false });
+    return segs;
+  }
 </script>
 
 <div class="match-panel" bind:this={listEl} onkeydown={handleKeydown} role="listbox" tabindex="-1" aria-label="Snippets">
   {#if prompts.hits.length}
-    {#each prompts.hits as hit (hit.snippet.name)}
+    {#each prompts.hits as hit, i (hit.snippet.name)}
+      {@const spans = deriveSpans(hit.snippet.name, hit.snippet.content, queryTokens)}
       <button
         type="button"
         class="match-hit"
         role="option"
         aria-selected="false"
         onclick={() => onInsert(hit.snippet)}
+        onmouseenter={() => (expandedIdx = i)}
+        onmouseleave={() => (expandedIdx = null)}
+        onfocus={() => (expandedIdx = i)}
+        onblur={() => (expandedIdx = null)}
         title="Insert at cursor"
       >
-        <span class="match-hit__name">{hit.snippet.name}</span>
+        <span class="match-hit__name">
+          {#each renderSpans(hit.snippet.name, spans.nameSpans) as seg}{#if seg.hl}<mark>{seg.t}</mark>{:else}{seg.t}{/if}{/each}
+        </span>
+        {#if expandedIdx === i}
+          <span class="match-hit__body">
+            {#each renderSpans(hit.snippet.content, spans.contentSpans) as seg}{#if seg.hl}<mark>{seg.t}</mark>{:else}{seg.t}{/if}{/each}
+          </span>
+        {/if}
       </button>
     {/each}
     {#if truncated}
@@ -99,7 +195,7 @@
     {/if}
   {:else if prompts.activeProjectPath === null}
     <div class="match-panel__empty">
-      No prompt folder yet. Add one with <strong>⋯</strong> above — pick any directory and every
+      No prompt folder yet. Add one with <strong>+</strong> above — pick any directory and every
       <code>.md</code> file in it becomes a snippet.
     </div>
   {:else if prompts.matchQuery.trim()}
@@ -146,6 +242,33 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Hover/focus-reveal of the full body (§1: "hover reveals, click edits" applied
+     to the library too). Collapsed by default — only the hovered/focused row
+     pays for it, both in layout and in the {#if expandedIdx === i} above. */
+  .match-hit__body {
+    display: block;
+    margin-top: 0.3rem;
+    padding-top: 0.3rem;
+    border-top: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    line-height: 1.5;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+  /* Query-token matches — same accent the row's own hover/focus border uses, so
+     the highlight reads as "this is why this row is here" rather than a
+     disconnected color. */
+  .match-hit__name mark,
+  .match-hit__body mark {
+    background: color-mix(in srgb, var(--accent-snippet) 40%, transparent);
+    color: var(--text);
+    border-radius: 0.15rem;
+    padding: 0 0.05rem;
   }
   .match-panel__empty {
     font-size: 0.72rem;
