@@ -10,7 +10,9 @@ mounted from [`SessionEditor.svelte`](../src/lib/components/SessionEditor.svelte
 items live in [`project_docs/roadmap.md`](roadmap.md).
 
 **See "v2 — fuzzy/intent search redesign" directly below — BUILT and shipped 2026-07-07 (issue #5,
-closed) — it supersedes §2, §9, and parts of §12/§14 of the Phase 1/2 spec that follows it.**
+closed) — it supersedes §2, §9, and parts of §12/§14 of the Phase 1/2 spec that follows it. Then
+"v3 — Narrow to messages" (issue #35, 2026-07-16) narrows the index to conversation text only and
+shrinks the filters/UI to date + project — read it for the current source/schema/filter shape.**
 
 **Deviations from the Phase 1/2 spec below (intentional):**
 - `blocks` gained a **`uuid`** column (historical — the `blocks` table itself is gone as of the v2
@@ -152,6 +154,38 @@ profile (small volume, quality/intent over performance) and is **not** sharing t
 see [issue #7's design comment](https://github.com/zhangxingeng/ccdeck/issues/7#issuecomment-4910536711)
 §F2 for its own (local-embedding-based) approach. Chat search and prompt search are deliberately two
 separate engines, not one abstraction forced to fit both.
+
+---
+
+## v3 — Narrow to messages (BUILT 2026-07-16, issue #35)
+
+Founder direction: users search for what was **said**, not for thinking/tool noise. Indexing all five
+block types bloated the index (tool_result bodies are the bulk) and forced a filter UI nobody needed.
+
+**What changes vs. v2:**
+- **Extraction** (`extract.rs`) indexes only `user`/`assistant` **text** blocks. The `thinking`,
+  `tool_use`, and `tool_result` branches are gone — a block's `source` is now always `"user"` or
+  `"assistant"`. `block_no` (still a dedup key, never a position) now counts only text blocks, which
+  happens to line up with the frontend's own text-only block list post render-trim.
+- **Schema** (`index.rs`), derived from the narrower requirement rather than kept for consistency:
+  - **`tool_name` field dropped entirely** — it only ever held a `tool_use` block's name, and nothing
+    is a `tool_use` block anymore, so it was always `""` and its only reader (the tool-name filter) is
+    gone.
+  - **`source` demoted `STRING | STORED` → `STORED`** — it's no longer a query filter, only display
+    metadata (the You/Claude hit badge), so it's stored and returned but not indexed.
+- **Filters** (`SearchFilters`, both tiers): `sources` and `tool_name` removed end to end. What
+  remains is **date + project** (+ the `session_path` scope used by in-chat find). The cold tier's
+  per-block predicate is now date-only (`passes_date_filter`).
+- **Filter UI**: `BrowseView` loses the source chips, the tool-name input, and the client-only **sort
+  dropdown**; browse is recency-ordered by file mtime (desc). `InlineSearchPanel` is just a query box.
+  Search results stay BM25/relevance-ordered.
+- **Migration**: no manual `ENGINE_VERSION` bump — dropping `tool_name` and re-indexing `source` both
+  change the serialized `Schema`, so `index::schema_fingerprint()` shifts and `db::ensure_engine_version`
+  forces exactly one automatic rebuild on existing installs (an empty-index upgrade would be a
+  shipped-users regression). Locked in by `index::tests::schema_fingerprint_differs_from_old_shape`.
+
+**Explicitly rejected (founder, 2026-07-16):** embedding/semantic chat search — keyword is good enough
+for this corpus; see `project_docs/roadmap.md` §Future ideas.
 
 ---
 

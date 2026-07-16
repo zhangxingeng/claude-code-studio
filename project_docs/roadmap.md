@@ -817,6 +817,12 @@ none of these are committed work — each needs its own design pass before becom
 - This theme — **embedding real AI assistance into the control center itself**, not just viewing/
   configuring Claude Code from the outside — is still open via the "Ask Claude" idea above; worth
   revisiting once that one gets a concrete design.
+- **Embedding / semantic chat search — rejected (2026-07-16).** Adding vector/semantic ranking to the
+  chat search engine (beyond the current tantivy BM25 + fuzzy keyword match). The founder explicitly
+  ruled it out: keyword search is good enough for this corpus, and the cost/complexity of a local
+  embedding model over ~1GB of chat history isn't worth it. **Do not build it.** (Separate from the
+  prompt-library embedding work in issue #7, which is its own small-volume engine.) Recorded during
+  the v0.14 search-narrowing round (#35) so it isn't re-proposed.
 
 ## Release history
 
