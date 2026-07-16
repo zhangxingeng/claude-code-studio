@@ -29,8 +29,7 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   return invoke<T>(cmd, args);
 }
 
-// In-memory backup store for browser-dev mode only.
-const devBackups: Record<string, BackupVersion[]> = {};
+// In-memory edited-content store for browser-dev mode only.
 const devContent: Record<string, string> = {};
 
 export async function findProjectsDir(): Promise<string | null> {
@@ -133,20 +132,9 @@ export async function snapshot(path: string): Promise<BackupVersion> {
       path: `${path}.v1.bak`,
       size: (devContent[path] ?? mockSession).length,
     };
-    devBackups[path] = [v];
     return v;
   }
   return call<BackupVersion>('snapshot', { path });
-}
-
-export async function listBackups(sessionPath: string): Promise<BackupVersion[]> {
-  if (!isTauri()) return devBackups[sessionPath] ?? [];
-  return call<BackupVersion[]>('list_backups', { sessionPath });
-}
-
-export async function restoreBackup(backupPath: string): Promise<string> {
-  if (!isTauri()) return mockSession;
-  return call<string>('restore_backup', { backupPath });
 }
 
 // ---------------------------------------------------------------------------

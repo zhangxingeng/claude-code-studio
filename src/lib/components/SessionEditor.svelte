@@ -3,7 +3,7 @@
    * SessionEditor.svelte — the single-page session view *is* the editor.
    *
    * This component is the orchestrator: it owns the byte-faithful edit Draft
-   * and the save/discard/restore-backup/exit flows, and turns the draft into a
+   * and the save/discard/exit flows, and turns the draft into a
    * display model (one chat bubble per renderable row). All rendering lives in
    * focused children: SessionMetaCard · MessageCell. The dirty indicator and
    * Save / Save as copy / Discard controls live in the top nav (+page.svelte),
