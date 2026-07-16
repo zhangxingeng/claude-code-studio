@@ -764,16 +764,10 @@ async function devSearch(
 
   DEV: for (const [lineNo, entry] of entries.entries()) {
     for (const [blockNo, b] of entry.blocks.entries()) {
-      // Only 'text' blocks exist now (thinking/tool_use/tool_result rendering
-      // was removed), so the source is just the entry's role and a toolName
-      // restriction can never match.
+      // Messages-only search (#35): only text blocks are indexed; source is
+      // just the entry's role (user/assistant). No source/tool-name filter.
       const source = entry.type;
       const text = b.text ?? '';
-      if (filters.toolName) {
-        continue;
-      } else if (filters.sources.length && !filters.sources.includes(source)) {
-        continue;
-      }
       re.lastIndex = 0;
       summary.scanned++;
       const ranges: [number, number][] = [];

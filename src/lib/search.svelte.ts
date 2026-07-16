@@ -25,11 +25,9 @@ export interface ProjectOption {
 
 export const search = $state({
   query: '',
-  sources: ['user', 'assistant'] as string[], // "Messages" on by default
   from: null as number | null,
   to: null as number | null,
   projects: [] as string[], // selected project labels; empty = all
-  toolName: '' as string, // restrict to tool_use blocks for this tool name; '' = no restriction
   sessionOnly: false, // when true + currentSessionPath is set, restrict to that one session
   currentSessionPath: null as string | null, // the session the search was opened from, if any
   hits: [] as SearchHit[],
@@ -51,11 +49,9 @@ let seen = new Set<string>();
 
 function currentFilters(): SearchFilters {
   return {
-    sources: search.sources,
     from: search.from,
     to: search.to,
     projects: search.projects,
-    toolName: search.toolName.trim() || null,
     sessionPath: search.sessionOnly ? search.currentSessionPath : null,
   };
 }
@@ -123,14 +119,6 @@ export function loadMore(): void {
   scheduleSearch();
 }
 
-export function toggleSource(source: string): void {
-  const i = search.sources.indexOf(source);
-  if (i >= 0) search.sources.splice(i, 1);
-  else search.sources.push(source);
-  search.limit = search.pageSize;
-  scheduleSearch();
-}
-
 export function toggleProject(label: string): void {
   const i = search.projects.indexOf(label);
   if (i >= 0) search.projects.splice(i, 1);
@@ -150,13 +138,6 @@ export function setDateRange(fromISO: string, toISO: string): void {
   search.from = fromISO ? Date.parse(fromISO + 'T00:00:00') : null;
   // `to` is inclusive of the whole day.
   search.to = toISO ? Date.parse(toISO + 'T23:59:59.999') : null;
-  search.limit = search.pageSize;
-  scheduleSearch();
-}
-
-/** Restrict to tool_use blocks for this tool name ('' clears the restriction). */
-export function setToolName(name: string): void {
-  search.toolName = name;
   search.limit = search.pageSize;
   scheduleSearch();
 }

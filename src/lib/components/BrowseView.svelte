@@ -2,8 +2,8 @@
   /**
    * BrowseView.svelte — the home view: browse + search merged into one.
    *
-   * No query: shows every session grouped by project (title, stats, sort,
-   * inline rename) — what used to be the whole of this file.
+   * No query: shows every session grouped by project (title, stats, inline
+   * rename), recency-ordered by mtime — what used to be the whole of this file.
    * Query typed: same project grouping, but each project's sessions collapse
    * to just the ones with a hit, each showing its matched lines underneath
    * (title instead of the raw jsonl filename), reusing the exact same search
@@ -23,11 +23,9 @@
   import {
     search,
     setQuery,
-    toggleSource,
     toggleProject,
     clearProjects,
     setDateRange,
-    setToolName,
     scheduleSearch,
     loadMore,
     initSearch,
@@ -44,18 +42,10 @@
     onOpenSettings?: (cwd: string, label: string) => void;
   } = $props();
 
-  // Source filter presented as three friendly groups over the low-level sources.
-  const SOURCE_GROUPS = [
-    { label: 'Messages', sources: ['user', 'assistant'] },
-    { label: 'Thinking', sources: ['thinking'] },
-    { label: 'Tool calls', sources: ['tool_use', 'tool_result'] },
-  ];
-
   // ── session list state ──────────────────────────────────────────────────────
   let sessions = $state<SessionMeta[]>([]);
   let loadError = $state<string | null>(null);
   let loading = $state(true);
-  let sortBy = $state<'newest' | 'oldest' | 'title'>('newest');
   /** Home directory, used to render project paths as "~/...". Null until loaded. */
   let homeDir = $state<string | null>(null);
 
@@ -165,14 +155,6 @@
   /** path -> enriched lookup, to resolve a search hit's session to a real title/meta. */
   let byPath = $derived(new Map(enriched.map((e) => [e.path, e])));
 
-  function sortItems<T extends { date: string; title: string }>(items: T[]): T[] {
-    return [...items].sort((a, b) => {
-      if (sortBy === 'newest') return (b.date || '').localeCompare(a.date || '');
-      if (sortBy === 'oldest') return (a.date || '').localeCompare(b.date || '');
-      return a.title.localeCompare(b.title);
-    });
-  }
-
   function groupByProject<T extends { project: string }>(
     items: T[]
   ): { project: string; items: T[] }[] {
@@ -191,8 +173,12 @@
   }
 
   // ── browse mode (no query): every session, grouped by project ───────────────
+  // Recency-ordered by file mtime (desc) — list_sessions returns unsorted, and
+  // the sort dropdown was removed with the source/tool filters (#35).
   let browseGroups = $derived.by(() =>
-    groupByProject(sortItems(enriched.filter((e) => projectAllowed(e.project))))
+    groupByProject(
+      enriched.filter((e) => projectAllowed(e.project)).sort((a, b) => b.meta.mtime - a.meta.mtime)
+    )
   );
 
   // Flat, display-order view of browseGroups — what browse-mode Up/Down/Enter walks.
@@ -238,7 +224,9 @@
       }
       g.hits.push(h);
     }
-    return sortItems([...bySession.values()]);
+    // Insertion order = relevance order: hits stream in BM25-ranked, so the
+    // session of the top hit leads. No client re-sort — the query decides (#35).
+    return [...bySession.values()];
   });
 
   let searchGroups = $derived.by(() =>
@@ -269,18 +257,6 @@
       search.status.totalSessions > 0 &&
       search.status.indexedSessions < search.status.totalSessions
   );
-
-  function groupOn(sources: string[]): boolean {
-    return sources.every((s) => search.sources.includes(s));
-  }
-  function toggleGroup(sources: string[]): void {
-    const on = groupOn(sources);
-    for (const s of sources) {
-      const present = search.sources.includes(s);
-      if (on && present) toggleSource(s);
-      else if (!on && !present) toggleSource(s);
-    }
-  }
 
   function onDate(): void {
     setDateRange(fromISO, toISO);
@@ -547,29 +523,11 @@
     />
   </div>
 
-  <!-- ── Filters ─────────────────────────────────────────────────────────── -->
+  <!-- ── Filters (date + project — see #35) ──────────────────────────────── -->
   <div class="filters">
-    <div class="filter-set">
-      {#each SOURCE_GROUPS as g (g.label)}
-        <button
-          class="chip" class:on={groupOn(g.sources)}
-          onclick={() => toggleGroup(g.sources)} type="button">{g.label}</button>
-      {/each}
-    </div>
-
     <div class="filter-set dates">
       <label>From <input type="date" bind:value={fromISO} onchange={onDate} /></label>
       <label>To <input type="date" bind:value={toISO} onchange={onDate} /></label>
-    </div>
-
-    <div class="filter-set">
-      <input
-        type="text"
-        class="tool-name-input"
-        placeholder="Tool name (e.g. Bash)"
-        value={search.toolName}
-        oninput={(e) => setToolName(e.currentTarget.value)}
-      />
     </div>
 
     {#if search.availableProjects.length > 0}
@@ -583,14 +541,6 @@
         {/if}
       </div>
     {/if}
-
-    <div class="filter-set sort-set">
-      <select bind:value={sortBy} aria-label="Sort order">
-        <option value="newest">Newest</option>
-        <option value="oldest">Oldest</option>
-        <option value="title">Title</option>
-      </select>
-    </div>
   </div>
 
   {#if showProjects}
@@ -856,11 +806,6 @@
   .filter-set { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
   .filter-set.dates label { font-size: 0.72rem; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.25rem; }
   .filter-set.dates input { font-size: 0.72rem; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 0.3rem; padding: 0.15rem 0.3rem; }
-  .filter-set.sort-set { margin-left: auto; }
-  .filter-set.sort-set select {
-    padding: 0.3rem 0.5rem; border-radius: 999px; border: 1px solid var(--border);
-    background: var(--bg-subtle); color: var(--text-muted); font-size: 0.74rem; font-family: inherit; cursor: pointer;
-  }
 
   .chip {
     font-size: 0.74rem; padding: 0.22rem 0.55rem;
@@ -870,12 +815,6 @@
   .chip:hover { color: var(--text); }
   .chip.on { background: color-mix(in srgb, var(--accent-user) 18%, transparent); color: var(--text); border-color: color-mix(in srgb, var(--accent-user) 40%, transparent); }
   .chip.ghost { border-style: dashed; }
-
-  .tool-name-input {
-    font-size: 0.74rem; padding: 0.22rem 0.55rem; width: 9.5rem;
-    background: var(--bg-subtle); color: var(--text); border: 1px solid var(--border); border-radius: 999px;
-  }
-  .tool-name-input:focus { border-color: var(--accent-user); outline: none; }
 
   .project-list {
     max-height: 190px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.1rem;

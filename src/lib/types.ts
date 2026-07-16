@@ -89,13 +89,12 @@ export interface SessionMeta {
 // Search (mirrors the Rust search module's camelCase-serialized structs)
 // ---------------------------------------------------------------------------
 
-/** Query-time filters. Empty sources/projects mean "no restriction". */
+/** Query-time filters. Empty projects means "no restriction". Narrowed to
+ *  date + project (+ sessionPath scope) when search became messages-only (#35). */
 export interface SearchFilters {
-  sources: string[];             // low-level: user|assistant|thinking|tool_use|tool_result
   from: number | null;           // inclusive epoch-ms lower bound
   to: number | null;             // inclusive epoch-ms upper bound
   projects: string[];            // home-relative project labels
-  toolName: string | null;       // restrict to tool_use blocks for this exact tool name; overrides `sources`
   sessionPath: string | null;    // restrict to this one session file ("current session only")
 }
 

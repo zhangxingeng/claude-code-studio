@@ -2,16 +2,16 @@
   /**
    * InlineSearchPanel.svelte — "find in this chat", reusing the same search
    * engine/store as the home page's merged Browse+Search, scoped to one
-   * session. Trimmed filter set (query + tool name — no source chips, date
-   * range, or project filter, since those don't apply to a single
-   * already-open chat; no case/whole-word/regex mode, see issue #5). Results
+   * session. Just a query box — no source chips, date range, project, or
+   * tool-name filter (those don't apply to a single already-open chat; no
+   * case/whole-word/regex mode, see issue #5; tool-name cut with #35). Results
    * are a flat list (no project/chat grouping needed — every hit is already
    * in this session); clicking one scrolls to that message via the caller's
    * jumpTo.
    */
   import { onMount, onDestroy, tick } from 'svelte';
   import type { SearchHit } from '$lib/types';
-  import { search, setQuery, setToolName, initSearch, disposeSearch } from '$lib/search.svelte';
+  import { search, setQuery, initSearch, disposeSearch } from '$lib/search.svelte';
 
   let {
     sessionPath,
@@ -117,13 +117,6 @@
         autocomplete="off"
       />
     </div>
-    <input
-      type="text"
-      class="ics__tool-input"
-      placeholder="Tool name"
-      value={search.toolName}
-      oninput={(e) => setToolName(e.currentTarget.value)}
-    />
     <button class="btn btn--ghost btn--sm ics__close" onclick={onClose} type="button" aria-label="Close find">✕</button>
   </div>
 
@@ -180,12 +173,6 @@
     border: 1px solid var(--border-strong); border-radius: 0.4rem; outline: none;
   }
   .ics__input input[type='text']:focus { border-color: var(--accent-user); }
-
-  .ics__tool-input {
-    flex: 0 0 auto; width: 8rem; font-size: 0.78rem; padding: 0.4rem 0.55rem;
-    background: var(--bg-subtle); color: var(--text); border: 1px solid var(--border); border-radius: 0.35rem;
-  }
-  .ics__tool-input:focus { border-color: var(--accent-user); outline: none; }
 
   .ics__close { flex: 0 0 auto; }
 
