@@ -34,7 +34,6 @@
   import {
     toRenderNodes,
     chipAt,
-    flatten,
     ZWSP,
     type Caret,
     type RawNode,
@@ -45,9 +44,6 @@
   interface Props {
     /** Clicking a chip — the one and only way to edit a snippet. */
     onOpenChip: (cid: string) => void;
-    /** Save typed text as a new snippet: the selection if there is one, else the
-     *  whole prompt. Opens the same popup, prefilled — one of its two entrances. */
-    onSaveAsSnippet: (text: string) => void;
     /** Copy Prompt — the parent owns the clipboard call + toast. */
     onCopy: () => void;
     /** ↓ at the very end steps into the match panel; returns whether the panel had
@@ -55,10 +51,13 @@
     onStepIntoPanel: () => boolean;
   }
 
-  let { onOpenChip, onSaveAsSnippet, onCopy, onStepIntoPanel }: Props = $props();
+  let { onOpenChip, onCopy, onStepIntoPanel }: Props = $props();
 
   let boxEl: HTMLDivElement | undefined = $state(undefined);
-  /** Bumped on every selection change so the save label re-reads the selection. */
+  /** Bumped on every selection change. Currently write-only — it fed the now-cut
+   *  "Save as snippet" label's selection-aware recompute. Left in place (with the
+   *  selectionchange listener below) for Lane F's copy-event fix, which needs the
+   *  same "is there a live selection" signal for its own selection-aware Ctrl+C. */
   let selectionNonce = $state(0);
 
   const hasContent = $derived(prompts.doc.nodes.length > 0);
@@ -94,26 +93,6 @@
     };
     for (const child of Array.from(range.cloneContents().childNodes)) walk(child);
     return out.replaceAll(ZWSP, '');
-  }
-
-  /** Save the selection if there is one, else the whole prompt. The label says
-   *  which, so the button never silently saves more than the user meant. */
-  const savingSelection = $derived.by(() => {
-    void selectionNonce;
-    void prompts.doc;
-    return selectionText() !== '';
-  });
-
-  function handleSaveAs(): void {
-    onSaveAsSnippet(selectionText() || flatten(prompts.doc));
-  }
-
-  /** The Mod+S hotkey is owned by the view, but the selection it acts on lives
-   *  here. Exporting the one implementation is what keeps the hotkey and the
-   *  button selection-aware *together* — a second copy on the view could only
-   *  drift, and a drift there silently saves more than the user meant. */
-  export function saveAs(): void {
-    handleSaveAs();
   }
 
   /** Esc out of the match panel puts the caret back in the box. */
@@ -423,18 +402,10 @@
 
     <div class="compose__actions">
       {#if hasContent}
-        <!-- Selection-aware: the label names what will actually be saved, so the
-             button never silently stores more than the user meant. Swallows
-             mousedown so clicking it cannot collapse the selection it acts on. -->
-        <button
-          type="button"
-          class="btn btn--ghost btn--sm"
-          onmousedown={(e) => e.preventDefault()}
-          onclick={handleSaveAs}
-          title="Save as a reusable library snippet"
-        >
-          {savingSelection ? 'Save selection as snippet' : 'Save as snippet'}
-        </button>
+        <!-- "Save as snippet" lived here in round 1 and is cut (round 2 §1): the
+             library's `+` button is now the only way to create one. Lane F
+             relocates this to a top-right icon — left in place here so this
+             lane's deletion doesn't collide with that move. -->
         <button type="button" class="btn btn--primary btn--sm" onclick={onCopy}>Copy prompt</button>
       {/if}
     </div>
