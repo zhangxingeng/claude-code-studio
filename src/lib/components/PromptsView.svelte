@@ -27,10 +27,12 @@
   import MatchPanel from './prompts/MatchPanel.svelte';
   import SnippetModal, { type SnippetModalContext } from './prompts/SnippetModal.svelte';
   import ProjectTabs from './prompts/ProjectTabs.svelte';
-  import ProjectManagerPopover from './prompts/ProjectManagerPopover.svelte';
 
   let panelCollapsed = $state(false);
-  let managerOpen = $state(false);
+  /** True while a project's right-click context menu (rename/color/delete) is
+   *  open — the replacement for the deleted `ProjectManagerPopover`'s
+   *  `managerOpen`, same keyboard-disarm purpose. */
+  let projectMenuOpen = $state(false);
   let modalContext = $state<SnippetModalContext | null>(null);
   /** MatchPanel instance — only its exported focusFirst() is called (the ↓ step
    *  into the panel). A structural type avoids the component-instance gymnastics. */
@@ -41,7 +43,7 @@
 
   /** True while a modal or popover owns the keyboard — the view-scoped hotkeys
    *  disarm so a modal keystroke never triggers a command. */
-  const keyboardCaptured = $derived(modalContext !== null || managerOpen);
+  const keyboardCaptured = $derived(modalContext !== null || projectMenuOpen);
 
   onMount(() => {
     initPrompts();
@@ -140,15 +142,10 @@
 </script>
 
 <div class="prompts-view">
-  <div class="prompts-view__tabs">
-    <div class="prompts-view__tabrow">
-      <div class="prompts-view__tabrow-tabs">
-        <ProjectTabs onOpenManager={() => (managerOpen = !managerOpen)} />
-      </div>
+  <div class="prompts-view__tabrow">
+    <div class="prompts-view__tabrow-tabs">
+      <ProjectTabs onProjectMenuOpenChange={(open) => (projectMenuOpen = open)} />
     </div>
-    {#if managerOpen}
-      <ProjectManagerPopover onClose={() => (managerOpen = false)} />
-    {/if}
   </div>
 
   {#if prompts.loadError}
@@ -232,9 +229,6 @@
     min-height: calc(100vh - var(--header-h) - 9rem);
   }
 
-  .prompts-view__tabs {
-    position: relative; /* anchors the project-manager popover */
-  }
   .prompts-view__tabrow {
     display: flex;
     align-items: center;
