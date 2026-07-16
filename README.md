@@ -1,21 +1,19 @@
 # CC Deck
 
-**A friendly control center for [Claude Code](https://claude.com/claude-code)** — browse your
-history, fix your settings, and launch sessions, all without living in a terminal or hand-editing
-JSON.
+**A friendly companion for [Claude Code](https://claude.com/claude-code)** — search your entire
+conversation history, edit it, and share it, without living in a terminal or reading raw JSON.
 
 **Offline** · **Your data never leaves your machine** · **Open source, MIT licensed**
 
 ## Why CC Deck exists
 
-Claude Code is remarkably capable, but a few things keep it from being for absolutely everyone: **the
-command line** and **a settings system spread across nested JSON files that even experienced
-developers lose track of.**
+Claude Code writes every conversation to disk — and then gives you almost no way to get back into
+that history: no search, no readable view, no way to hand a transcript to someone else.
 
-CC Deck's whole job is to take that wall down. Everything it does follows one rule: **simple by
-default, advanced on demand.** The things you do most are one click away and explained in plain
-English. The power-user controls are all still there; they just stay out of your way until you go
-looking for them.
+CC Deck does two things with that history, and does them properly: **search** (find any conversation
+you've ever had, instantly) and **edit & share** (redact what's sensitive, then export a clean,
+readable file). Everything follows one rule: **simple by default, advanced on demand** — the things
+you do most are one click away, and power-user controls stay out of your way until you go looking.
 
 ## Your history, finally readable
 
@@ -58,7 +56,7 @@ new session's resume command.
 
 CC Deck is a companion to Claude Code, not a replacement for it — you'll need
 [Claude Code installed](https://code.claude.com/docs/en/quickstart) first. Once that's set up, CC Deck
-finds your sessions and settings automatically; there's nothing to configure.
+finds your sessions automatically; there's nothing to configure.
 
 Download the installer for your platform from the [Releases page](https://github.com/zhangxingeng/ccdeck/releases):
 
@@ -81,9 +79,9 @@ expected; here's how to get past it:
 
 ## Privacy / how it works
 
-CC Deck runs entirely on your local filesystem. It reads and writes the same session and settings
-files Claude Code already uses under `~/.claude/`, and keeps its own data (backups, search index)
-under `~/.ccdeck/`. Nothing is ever uploaded anywhere.
+CC Deck runs entirely on your local filesystem. It reads and writes the same session files Claude
+Code already uses under `~/.claude/`, and keeps its own data (backups, search index) under
+`~/.ccdeck/`. Nothing is ever uploaded anywhere.
 
 CC Deck makes exactly one kind of network request, to fetch, never to send: its own update check —
 those artifacts are cryptographically signed, so you can trust they came from this project.
@@ -98,9 +96,9 @@ plain TypeScript so it's easy to test and reason about. Full command contract an
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ```
-src-tauri/  Rust — native file access only (reads ~/.claude, settings.json tiers, search index)
-src/lib/    TypeScript — pure logic (parsing, session model) + Tauri API wrappers
-src/routes/ Svelte 5 — the UI (browse+search / view / edit / settings)
+src-tauri/  Rust — native file access only (reads ~/.claude history, the ~/.ccdeck data root, search index)
+src/lib/    TypeScript — pure logic (parsing, session model), Tauri API wrappers, and the Svelte 5 UI components
+src/routes/ SvelteKit — the single-page shell that mounts the views: browse+search, view, edit, app config
 ```
 
 ### Build from source
@@ -141,12 +139,11 @@ whether a new control belongs up front or behind an "Advanced" toggle, default t
 **Does CC Deck send my conversations anywhere?** No. Everything happens locally; the only network call
 CC Deck makes is its own update check.
 
-**Does CC Deck replace Claude Code?** No — it's a control center *for* Claude Code. You still need
-Claude Code installed; CC Deck makes it easier to see, configure, and launch.
+**Does CC Deck replace Claude Code?** No — it's a companion *for* Claude Code. You still need Claude
+Code installed; CC Deck makes its history searchable, editable, and shareable.
 
-**Will editing settings in CC Deck break something?** CC Deck writes exactly the tier you edit, in the
-same JSON format Claude Code reads — nothing is merged behind your back, and conflicts across tiers
-are called out before you save.
+**Will editing a conversation break something?** CC Deck writes the same JSONL format Claude Code
+reads, and snapshots a backup before every save. Sessions stay resumable after an edit.
 
 **Is CC Deck affiliated with Anthropic?** No — see the disclaimer below. It's an independent project
 built to make an existing tool friendlier, not an official product.

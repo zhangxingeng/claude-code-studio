@@ -18,9 +18,9 @@ help (code, bug reports, docs, design feedback) is welcome.
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full Rust ↔ JS command contract. Short version:
 
 ```
-src-tauri/  Rust — native file access only (reads ~/.claude, settings.json tiers, search index)
-src/lib/    TypeScript — pure logic (parsing, session model) + Tauri API wrappers
-src/routes/ Svelte 5 — the UI (browse / view / edit / search / settings)
+src-tauri/  Rust — native file access only (reads ~/.claude history, the ~/.ccdeck data root, search index)
+src/lib/    TypeScript — pure logic (parsing, session model), Tauri API wrappers, and the Svelte 5 UI components
+src/routes/ SvelteKit — the single-page shell that mounts the views: browse+search, view, edit, resume-copy, app config
 ```
 
 `src/lib/api.ts` is the seam: every Tauri command has a browser-dev mock behind an `isTauri()`
@@ -64,8 +64,8 @@ equivalent per-OS bundles elsewhere) if you want to test a real install.
 ## Design principle
 
 CC Deck's guiding rule is **simple by default, advanced on demand**: the common path should stay
-approachable for non-technical users, while power-user options (custom terminals, advanced
-settings, raw JSON) stay available but out of the way. When in doubt about where a new control
+approachable for non-technical users, while power-user options (raw JSONL editing, update
+preferences) stay available but out of the way. When in doubt about where a new control
 should live, default to hiding it behind an "Advanced" toggle rather than surfacing it up front.
 
 ## Code of conduct
