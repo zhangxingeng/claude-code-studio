@@ -82,11 +82,6 @@ export const prompts = $state({
    *  one variable document-wide). Entries for names no longer in the doc are
    *  kept — retyping a name recalls its value; copy only reads live names. */
   fills: {} as Record<string, string>,
-  /** Per-variable as-variable state (contract §Copy output), keyed by name. A
-   *  name absent here is ON — the founder's safe default (as-var never breaks;
-   *  in-place substitution of unexpected data can bloat the prompt). Session-
-   *  only, never persisted to the snippet ([JC-9]). */
-  asVars: {} as Record<string, boolean>,
   // live matching
   matchQuery: '',
   hits: [] as ResolvedHit[],
@@ -329,11 +324,13 @@ export function composeInsertSnippet(name: string, content: string): void {
   prompts.renderNonce++;
 }
 
-/** `Use once`: this chip, this prompt, nothing written to the library. The escape
- *  hatch that makes "a chip is never editable in place" tolerable rather than a
- *  cage — tweak a prompt without polluting the library. */
+/** The popup's session-only `Save` (round 1's `Use once`, renamed): this chip,
+ *  this prompt, nothing written to the library. The escape hatch that makes "a
+ *  chip is never editable in place" tolerable rather than a cage — tweak a
+ *  prompt without polluting the library. Diverges the chip from its saved
+ *  file, so it marks `dirty`. */
 export function composeUseOnce(cid: string, content: string): void {
-  prompts.doc = replaceChipContent(prompts.doc, cid, content);
+  prompts.doc = replaceChipContent(prompts.doc, cid, content, true);
   prompts.renderNonce++;
 }
 
@@ -361,16 +358,10 @@ export function setFill(name: string, value: string): void {
 }
 
 /** The Copy Prompt deliverable: the composed prompt (typed text + every chip's
- *  BODY) through the copy pipeline. */
+ *  BODY) through the copy pipeline. Every variable is always hoisted into an
+ *  appended `<prompt_vars>` block (round 2 cut the per-variable toggle). */
 export function copyOutput(): string {
-  return copyText(flatten(prompts.doc), prompts.fills, prompts.asVars);
-}
-
-/** Set one variable's as-variable mode (contract §Copy output). Absent = ON, so
- *  an explicit `false` is how OFF is recorded. Session-only — never persisted to
- *  the snippet ([JC-9]). */
-export function setAsVar(name: string, on: boolean): void {
-  prompts.asVars[name] = on;
+  return copyText(flatten(prompts.doc), prompts.fills);
 }
 
 // ── snippet store ──────────────────────────────────────────────────────────────
