@@ -1,13 +1,16 @@
 # Prompt Library — Round 2: the UX pass
 
 **Status:** contract of record. Build teammates build against *this file*.
-**Branch:** continue on `prompt-simplify` (unmerged). **Target:** still v0.13.0 — this ships *with*
-round 1, not after it, so users see one change, not two.
+**Branch (corrected 2026-07-15):** `prompt-simplify` merged to `main` on 05628b9 and is now fully
+contained by it — every lane branches from **`main`**, not `prompt-simplify` (stale, do not use).
+**Target:** `v0.13.0` already shipped (tagged, round 1 alone) — round 2 ships as its own release, not
+bundled with round 1 as originally planned. Version number (patch `0.13.1` vs minor `0.14.0`) is an
+open call for the lead/founder at integration time, not something a lane needs to know.
 
 **Round 1** (`.claude/work/prompt_library_simplification_plan.md`) rebuilt the *model*: a snippet is
 a Markdown file, a project is a folder, search filters down, a chip is an atom edited only in a
-popup. It is built, merged to `prompt-simplify`, and green. **Round 2 does not touch the model.** It
-fixes the interaction on top of it.
+popup. It is built, merged to `main`, and shipped in `v0.13.0`. **Round 2 does not touch the model.**
+It fixes the interaction on top of it.
 
 The founder's verdict on round 1, which sets the tone: *"the current tag based prompt is really
 nice."* The chip model works. What is missing is the **information** the chips hide.
@@ -25,6 +28,53 @@ reading this will "helpfully" re-apply the cut.
 | **Cut project colors** as decoration on "a name and a path" | **Restore them.** A project has a color, set by right-click → change color | Colors are not decoration when there are several projects — they are how you know *which library you are in* at a glance. The cut was right about pins and wrong about color. |
 | **Kept the per-variable as-var toggle** (founder's explicit call last round) | **Cut the toggle. Always emit the XML block.** | *"For as-var, I think we don't need it. Default as append would be good. No need to override."* A toggle nobody flips is the archetype of the forgotten feature this whole effort exists to delete. |
 | Popup actions: `Save` / `Use once` / `Delete`, all in one row | **Split by blast radius** (below) | Three peer buttons hid the only distinction that matters: which of them touch the library on disk. |
+
+---
+
+## Clarifications — resolved 2026-07-15, read alongside the sections they patch
+
+Three gaps surfaced on review, before any lane started building. Recorded here rather than
+silently folded into the prose below, for the same reason the Reversals table is loud: an agent
+who reads §1/§4/§5 without this would build the earlier, contradictory version.
+
+**§1, match highlighting.** The matcher is hybrid — lexical (fzf-style subsequence, weighted
+name-over-content) blended with semantic (embedding cosine similarity), and the wire type
+(`MatchHit { name, score }`) carries no match positions. No backend change. Lane E derives spans
+client-side: run a case-insensitive substring/subsequence search for the query's tokens over the
+hit's name, then its content, same order the lexical scorer weighs them, and highlight the first
+span found per token. **A hit that cleared the bar only through the semantic engine renders with
+no highlight** — there is no literal substring to point at. This is a known partial fix, not a
+full one: it does not make a semantic-only hit's ranking legible, only a lexical one's. Good enough
+to ship; if it reads as more broken than helpful once built, that's a real signal to revisit, not a
+regression to silently patch around.
+
+**§4, project color.** A fixed swatch of 6–8 preset hues in the "change color" context-menu item —
+not a free/native color picker. Pull from the app's existing accent-color set rather than inventing
+a new palette.
+
+**§5, the popup — the two groups are independent, and one of them can be entirely absent.**
+Cancel is neutral, always shown, not part of either group.
+
+- **Left group ("touches the library"):** `Update` — always available; it is today's single `Save`
+  button unchanged (same name updates the file, a new name creates one — that mechanism doesn't
+  change). `Delete` — only when editing a chip whose file already exists on disk.
+- **Right group ("touches only this prompt"):** `Save` (session-only, no disk write) — only when
+  this popup is editing an existing chip in the compose box. **Absent** when opened from the
+  library's `+` button: there is no chip in the compose box yet to apply a session-only edit to, so
+  there is nothing for that group to mean. In that flow the popup shows Cancel + Update only.
+
+So the create-new flow (§1's `+` button) is: Cancel, Update — no contradiction with "Save = no disk
+write," because Save doesn't appear there at all.
+
+**New, small scope not in the original draft:** a chip that was edited via the session-only `Save`
+now diverges from the library file its name still points at. Give it a small indicator — on the
+chip in the compose box, and/or in the popup title — distinguishing "draft" (diverged, session-only
+edit applied) from "template as-is" (still identical to the saved file). This needs a `dirty`
+flag on the chip: set by `composeUseOnce` (session Save), cleared by `composeSaveChip`
+(Update) and by a fresh `composeInsertSnippet`. **Crosses Lane F and H**: the flag lives in the doc
+model (`compose/doc.ts`, arguably F's region) and the chip element is rendered in `ComposeBox.svelte`
+(F's file), but the popup title reading it is H's. Surface the exact field name/shape to each other
+rather than each lane guessing independently.
 
 ---
 
@@ -85,6 +135,13 @@ button produces.
 > Copy-Prompt hijacking a copy out of a **variable fill input** — that part still stands. Inside the
 > compose box, a selection copy is now *ours*, because the DOM text is wrong there.
 
+**Open question (confirm by feel, do not block on it):** does a *partial* selection also resolve
+`{var}` tokens to their filled values, or only flatten chips to their raw bodies (leaving `{var}`
+literal — today's Save-as-snippet behavior)? "Select-all + copy = the Copy button's output" is
+unambiguous; an arbitrary partial selection sitting on a `{var}` is not specified. Default to
+treating every copy-from-the-box the same as the Copy button (chips flattened, variables resolved)
+unless that reads wrong once built.
+
 **The variable fill list moves to the right side of the screen**, out of the space under the box, so
 the box can be as wide as possible.
 
@@ -130,6 +187,8 @@ user's git-tracked prompt folder; that invariant from round 1 is absolute).
 The three actions are not peers. Two of them **write to a file on disk**; one does not. Today they
 sit in one row, so nothing on screen says which is which.
 
+Editing an existing chip — both groups apply:
+
 ```
 ┌──────────────────────────────────────────────────────┐
 │  name  [ rust/code_review                          ] │
@@ -140,15 +199,33 @@ sit in one row, so nothing on screen says which is which.
 └──────────────────────────────────────────────────────┘
 ```
 
+Creating new, via the library's `+` button — no chip exists yet, so the right group (which acts
+on "this chip in this prompt") is **absent**, not merely empty:
+
+```
+┌──────────────────────────────────────────────────────┐
+│  name  [ rust/code_review                          ] │
+│  body  [ …                                         ] │
+│                                                      │
+│                     [Update]              [ Cancel ] │
+│                ╰── touches the library ──╯            │
+└──────────────────────────────────────────────────────┘
+```
+
+See the Clarifications section above for the exact applicability rule per button.
+
 | Button | Side | Effect |
 |---|---|---|
 | **Delete** | left | Removes the `.md` file. The chip in the current prompt **dissolves to typed text** — deleting a library file must not gut the prompt you are halfway through writing (round-1 rule, still holds). |
 | **Update** | left | Writes the `.md` file. A changed name writes a **new** file (this is still how "save as new" works — filename is identity). |
 | **Cancel** | right | Discards. |
-| **Save** | right | Applies the edit **to this chip in this prompt only**. Nothing is written to disk. This is round 1's `Use once`, renamed — the founder's naming, and it is better: from the user's seat they *are* just saving their edit. |
+| **Save** | right | Applies the edit **to this chip in this prompt only**. Nothing is written to disk. This is round 1's `Use once`, renamed — the founder's naming, and it is better: from the user's seat they *are* just saving their edit. **Absent** (not disabled — not rendered) when there is no chip in the compose box for the edit to apply to, i.e. when opened from the `+` button. |
 
 The left/right split is the whole point: **right-hand buttons affect the prompt you are composing;
 left-hand buttons affect the library.** That distinction was invisible before.
+
+A `Save` applied this way marks the chip **dirty** (diverged from its saved file) — see
+Clarifications above for the indicator this needs.
 
 ---
 
@@ -169,14 +246,17 @@ investigate → implement+commit → update-issue. **Lead owns integration.**
 
 | Lane | Owns |
 |---|---|
-| **E — Library panel** | Match highlighting, hover-to-full-text, the `+` create button, deleting the compose box's "Save as snippet" path |
-| **F — Compose box** | Chip hover preview, copy button (top-right icon), the expanded-copy clipboard fix, moving the fill list right |
-| **G — Projects** | Colors (incl. the `Project.color` field + state persistence), `+` button, folder picker dialog, right-click context menu |
-| **H — Popup** | The left/right button split and the `Use once` → `Save` rename |
+| **E — Library panel** | Match highlighting (client-side span derivation, see Clarifications), hover-to-full-text, the `+` create button, deleting the compose box's "Save as snippet" path |
+| **F — Compose box** | Chip hover preview, copy button (top-right icon), the expanded-copy clipboard fix, moving the fill list right, the chip-side half of the dirty/draft indicator |
+| **G — Projects** | Colors (fixed 6–8 swatch set, incl. the `Project.color` field + state persistence), `+` button, folder picker dialog, right-click context menu |
+| **H — Popup** | The left/right button split (incl. the right group's absence when opened from `+`), the `Use once` → `Save` rename, the popup-side half of the dirty/draft indicator |
 
 **Hub-file lanes** (`src/lib/prompts.svelte.ts`, `PromptsView.svelte`): E owns the panel + create
 path; F owns compose ops, fills, and copy; G owns `projects` and active-project state; H owns the
 modal context. **A teammate that needs another's region surfaces it to the lead rather than guessing.**
+
+**F/H coordinate on the `dirty` flag** (see Clarifications): it lives in the compose doc model,
+which F owns, but H's popup reads it. Agree the field name/shape before either builds against it.
 
 **The gate is the same as round 1, and so is its correction:** a whole-project `pnpm check` is *not*
 a per-lane gate — it is unsatisfiable across concurrent frontend lanes. Per lane: `cargo test` +
