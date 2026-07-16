@@ -132,17 +132,6 @@ impl Indexer {
         self.update_counts();
     }
 
-    /// Drop one file's docs (e.g. after our own delete). No caller yet — the
-    /// app has no delete-session command — but kept as the deletion
-    /// counterpart to `reindex_one`.
-    #[allow(dead_code)]
-    pub fn remove_one(&self, session_path: &str) {
-        if let (Ok(conn), Ok(mut writer)) = (self.conn.lock(), self.tantivy_writer.lock()) {
-            let _ = index::remove_from_index(&conn, &mut writer, &self.schema, session_path);
-        }
-        self.update_counts();
-    }
-
     pub fn status_snapshot(&self) -> IndexStatus {
         self.status.lock().map(|s| s.clone()).unwrap_or_default()
     }
@@ -329,7 +318,7 @@ pub async fn search(
             let Some((project, blocks)) = index::extract_file(&path, indexer.home()) else {
                 continue;
             };
-            if !filters.projects.is_empty() && !filters.projects.iter().any(|p| *p == project) {
+            if !filters.projects.is_empty() && !filters.projects.contains(&project) {
                 continue;
             }
             for b in &blocks {

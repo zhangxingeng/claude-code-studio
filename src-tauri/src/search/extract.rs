@@ -49,7 +49,8 @@ const INTERNAL_ECHO_PREFIXES: &[&str] = &[
     "<task-notification>",
 ];
 
-/// One extracted, searchable content block — a row-to-be in the `blocks` table.
+/// One extracted, searchable content block — staged into the tantivy full-text
+/// index by the indexer (the old SQLite `blocks` table is gone; see `index.rs`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtractedBlock {
     /// 0-based physical line index in the JSONL (for debugging / stable order).

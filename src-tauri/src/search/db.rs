@@ -97,6 +97,10 @@ fn acquire_migration_lock(tantivy_dir: &Path) -> Result<File, String> {
     }
     let file = std::fs::OpenOptions::new()
         .create(true)
+        // A pure advisory-lock target — never truncate it (it carries no
+        // content we'd want to clear); stating this explicitly clears the
+        // `clippy::suspicious_open_options` lint.
+        .truncate(false)
         .write(true)
         .open(&path)
         .map_err(|e| e.to_string())?;

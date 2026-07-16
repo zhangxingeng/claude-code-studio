@@ -16,19 +16,10 @@ mod extract;
 mod index;
 mod query;
 
-// Re-exports so the rest of the crate can use these without reaching into
-// submodules. `#[allow(unused)]` until wired up.
-#[allow(unused_imports)]
-pub use db::open_db;
-#[allow(unused_imports)]
-pub use extract::{extract_blocks, ExtractedBlock};
-#[allow(unused_imports)]
-pub use index::{
-    build_index_parallel, index_file, remove_from_index, session_files, sweep_index, IndexStats,
-    SearchSchema, SweepStats,
-};
-#[allow(unused_imports)]
-pub use query::{build_query, search_warm, SearchFilters, SearchHit, SearchSummary};
+// Every submodule item is reached via its own path (`db::`, `index::`, …) from
+// within the crate, so there are no crate-level re-exports here — an earlier
+// `pub use` block re-exported the whole surface "for convenience" but nothing
+// ever consumed it, so it was pure dead surface behind `#[allow(unused)]`.
 
 // Public so lib.rs can register `state::search` / `state::refresh_index` /
 // `state::index_status` as Tauri commands by their real paths.

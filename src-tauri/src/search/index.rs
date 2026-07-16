@@ -383,25 +383,6 @@ pub struct SweepStats {
     pub unchanged: usize,
 }
 
-/// Drop every indexed doc + fingerprint for a session path. Used both on
-/// deletion cleanup and as the eager "this file changed" hook after our own
-/// Save/Restore. Commits immediately (standalone call, not part of a batch).
-pub fn remove_from_index(
-    conn: &Connection,
-    writer: &mut IndexWriter,
-    schema: &SearchSchema,
-    session_path: &str,
-) -> Result<(), String> {
-    writer.delete_term(Term::from_field_text(schema.session_path, session_path));
-    writer.commit().map_err(|e| e.to_string())?;
-    conn.execute(
-        "DELETE FROM session_files WHERE session_path = ?1",
-        [session_path],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 /// Read every cached fingerprint into memory for cheap comparison.
 fn db_fingerprints(conn: &Connection) -> Result<HashMap<String, (i64, i64)>, String> {
     let mut stmt = conn
