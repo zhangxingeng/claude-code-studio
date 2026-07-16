@@ -257,16 +257,25 @@
             {confirmingDelete ? 'Really delete?' : 'Delete'}
           </button>
         {/if}
-        <button type="button" class="btn btn--ghost btn--sm" disabled={busy} onclick={update}>
+        <button
+          type="button"
+          class="btn btn--sm"
+          class:btn--ghost={fromChip}
+          class:btn--primary={!fromChip}
+          disabled={busy}
+          onclick={update}
+        >
           Update
         </button>
       </div>
       <span class="snippet-modal__spacer"></span>
       <!-- Right: touches only this prompt, session-only — the low-friction default
            a user reaches for while composing. `Save` is ABSENT (not disabled) when
-           there's no chip yet for a session-only edit to apply to; `Update` is the
-           only button left in that flow, so it stays ghost rather than borrowing
-           the emphasis a chip-edit's `Save` carries. -->
+           there's no chip yet for a session-only edit to apply to. When it's absent,
+           `Update` is the only real action left in the dialog and takes the primary
+           weight itself, rather than the dialog reading as unfinished with no
+           emphasis on its one action; when `Save` is present it's the low-friction
+           default, so `Update` steps back to ghost. -->
       <div class="snippet-modal__group">
         <button type="button" class="btn btn--ghost btn--sm" onclick={onClose}>Cancel</button>
         {#if fromChip}
