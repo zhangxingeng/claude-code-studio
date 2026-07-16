@@ -469,6 +469,12 @@
   let resumeMenu = $state<{ x: number; y: number; cwd: string; id: string } | null>(null);
 
   async function forkAndShowResume(e: MouseEvent, key: string) {
+    // Stop the opening click here: ResumeMenu mounts with a
+    // `<svelte:window onclick={onClose}>` outside-click guard, and without this
+    // the very click that opened it bubbles to window and self-closes it before
+    // paint (the button looked dead). The header Resume button in +page.svelte
+    // guards the same way — mirror it, don't invent a second pattern.
+    e.stopPropagation();
     if (!draft) return;
     const row = draft.rows[key];
     if (!row) return;
